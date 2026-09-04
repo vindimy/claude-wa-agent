@@ -6,7 +6,10 @@ given `data/tenants/<tenant>/auth/` at a time**: a second linked instance
 kicks the first off the session.
 
 This page covers first-time setup. Once it runs, [run.md](run.md) is the
-day-to-day reference. Summarizer login for every adapter, on both profiles,
+day-to-day reference. The Docker profile also runs on the Mac mini under
+Colima, which is the way to have containers come back on their own after
+a reboot: see [Docker profile on macOS (Colima)](#docker-profile-on-macos-colima).
+Summarizer login for every adapter, on both profiles,
 is in [Summarizer adapters: initialization](#summarizer-adapters-initialization)
 at the end.
 
@@ -158,6 +161,138 @@ because auth lives in the volume; migrations run on startup.
 3. Start the new profile. Do not start the old one again until you have
    deleted or renamed its `data/tenants/owner/auth/`.
 
+## Docker profile on macOS (Colima)
+
+The Docker profile also runs on the Mac mini, with Colima providing the Linux
+VM and Docker Engine instead of Docker Desktop. The point of doing it this
+way is that the whole stack comes back by itself after a reboot: launchd
+starts Colima at login, the Docker daemon inside the VM restarts every
+container with `restart: unless-stopped`, and nothing has to be clicked.
+Docker Desktop cannot promise that without a logged-in user opening the app.
+
+Assumed: Colima is already installed (`brew install colima`), and the
+`docker` and `docker-desktop` casks are installed too. The casks stay; only
+Docker Desktop the application must not be running. The `docker` CLI and the
+`docker compose` plugin they ship are what Colima uses.
+
+This is still the Docker profile, so the
+[one-instance rule](#deploying-the-digest-agent) applies: do not run it
+alongside pm2 against the same `data/tenants/owner/auth/`.
+
+### 1. Keep Docker Desktop out of the way
+
+Docker Desktop and Colima each register a Docker *context*. Whichever is
+active decides where `docker` and `docker compose` send commands, and Docker
+Desktop switches the context back to itself every time it launches. So:
+
+1. Quit Docker Desktop (menu bar whale → Quit Docker Desktop).
+2. In Docker Desktop → Settings → General, untick **Start Docker Desktop
+   when you sign in**. Apply, then quit again.
+3. Make sure nothing in your shell profile exports `DOCKER_HOST`; it
+   overrides the context and points the CLI at whatever socket it names.
+
+The casks can stay installed. If you ever uninstall them, `brew install
+docker docker-compose` gives the CLI and the compose plugin back; the
+compose formula prints the `cliPluginsExtraDirs` snippet to add to
+`~/.docker/config.json`.
+
+### 2. Start Colima once by hand
+
+The first start sets the VM shape and persists it in
+`~/.colima/default/colima.yaml`; every later start, including the launchd
+one, reuses it.
+
+```bash
+colima start --vm-type vz --mount-type virtiofs --cpu 2 --memory 4 --disk 30
+docker context use colima
+docker context ls               # colima is marked with *
+docker run --rm hello-world
+```
+
+`vz` (Apple's Virtualization framework) with `virtiofs` is what makes the
+bind mounts safe: `data/` holds SQLite, and SQLite locking over the `sshfs`
+mount that the `qemu` VM type uses is not reliable. Both are the defaults
+on Apple silicon with macOS 13 or newer, but pass them anyway so a
+different default in a future Colima release cannot silently change the
+mount type. `colima status` shows the values in effect.
+
+Two cores and 4 GB are plenty for one tenant: the container is a single
+Node process plus the occasional CLI adapter spawn.
+
+### 3. Prepare the checkout
+
+Same as on the VPS, [steps 1 to 4 above](#1-prepare-the-directory-on-the-vps),
+with two macOS specifics:
+
+- **Put the checkout outside synced folders.** Not in Dropbox, iCloud
+  Drive, or anything else that watches and rewrites files. The SQLite
+  database is a bind mount written from inside the VM; a sync client
+  touching it at the same time will corrupt it. `~/srv/claude-wa-agent` or
+  similar is fine. Colima mounts your home directory into the VM by
+  default, so any path under `$HOME` works as a bind mount.
+- **`PUID`/`PGID` in `.env`** are still `id -u` / `id -g` on the Mac.
+  Colima's VM user carries your macOS uid, and virtiofs preserves it, so
+  the container writes `data/` and `vault/` as you.
+
+If you are moving an existing session from pm2 rather than pairing fresh,
+follow [Moving between host and Docker](#5-moving-between-host-and-docker):
+`pm2 stop wa-digest`, copy `data/` and `vault/` into the new checkout, and
+do not start pm2 again.
+
+Then `docker compose up -d` and check with `docker compose logs -f digest`.
+Published ports are forwarded to the Mac's loopback, so the optional
+dashboard is at `http://127.0.0.1:8787` with no tunnel.
+
+### 4. Make Colima start at login
+
+```bash
+colima stop
+brew services start colima
+colima status
+```
+
+`brew services` writes `~/Library/LaunchAgents/homebrew.mxcl.colima.plist`,
+which runs `colima start -f` with `KeepAlive`, so launchd restarts the VM if
+it dies. Only the `default` profile is managed this way, which is the one
+the steps above created.
+
+This is a *LaunchAgent*: it fires when your user logs in, not when the
+machine boots. For an unattended Mac mini turn on automatic login (System
+Settings → Users & Groups → **Automatically log in as** → your user).
+Automatic login is unavailable while FileVault is on; a headless Mac mini
+in a locked room is the usual trade-off. Running Colima as a root
+LaunchDaemon instead (`sudo brew services start colima`) does start at
+boot, but then the VM, the socket, and `~/.colima` belong to root and the
+checkout has to be readable by root; avoid it unless FileVault is
+non-negotiable.
+
+Also stop the Mac from sleeping, or the listener drops off WhatsApp every
+time the display does:
+
+```bash
+sudo pmset -a sleep 0 disksleep 0 displaysleep 10
+sudo pmset -a autorestart 1          # power back on after an outage
+```
+
+### 5. Prove it survives a reboot
+
+```bash
+sudo reboot
+# after the Mac is back and logged in, give it a minute
+colima status                        # Running, runtime: docker
+docker context show                  # colima
+docker compose ps                    # digest ... Up
+docker compose logs --since 5m digest | grep "session state"
+```
+
+The last line should end in `connected` without a QR being printed: the
+auth directory is a bind mount, so the session survived along with the
+database and its watermarks.
+
+Upgrades and day-to-day commands are identical to the VPS:
+`docker compose pull && docker compose up -d`, `docker compose exec digest
+node dist/cli/index.js groups`, and so on.
+
 ## Known failure modes
 
 - **`logged out by WhatsApp` at `fatal` level.** The phone unlinked this
@@ -179,6 +314,18 @@ because auth lives in the volume; migrations run on startup.
   temporary directory on purpose. Not an error.
 - **`EACCES` writing `data/` or `vault/`.** `PUID`/`PGID` in `.env` do not
   match the owner of the bind mounts. Set them to `id -u` / `id -g`.
+- **`Cannot connect to the Docker daemon` on the Mac, or containers gone
+  after `docker compose ps`.** Docker Desktop started and took the context
+  back. `docker context use colima`, then quit Docker Desktop and untick
+  its start-at-login setting. The containers are still there in the Colima
+  VM; only the CLI was looking at the wrong daemon.
+- **Nothing came back after a Mac reboot.** `brew services start colima`
+  installs a LaunchAgent, which runs only once a user is logged in. Turn
+  on automatic login or log in once; `colima status` should then say
+  `Running` and `docker compose ps` should show `digest` up. If Colima is
+  running but the container is not, the compose service is missing
+  `restart: unless-stopped`, or it was stopped by hand before the reboot
+  (`unless-stopped` honours a manual stop).
 - **`denied` on `docker compose pull`.** The package is private and you are
   not logged in to `ghcr.io`, or the token lacks `read:packages`.
 - **Digests fire at the wrong hour.** The cadence has no `tz` and the
