@@ -3,7 +3,15 @@ import { ADAPTER_NAMES, createSummarizer } from './registry.js';
 
 describe('createSummarizer', () => {
   it('builds known adapters', () => {
-    expect(ADAPTER_NAMES).toEqual(['fake', 'cli-claude', 'api-anthropic']);
+    expect(ADAPTER_NAMES).toEqual([
+      'fake',
+      'cli-claude',
+      'api-anthropic',
+      'api-openai',
+      'api-google',
+    ]);
+    expect(createSummarizer('api-openai').ok).toBe(true);
+    expect(createSummarizer('api-google').ok).toBe(true);
     const fake = createSummarizer('fake');
     expect(fake.ok && fake.value.name).toBe('fake');
     const claude = createSummarizer('cli-claude', { model: 'sonnet' });

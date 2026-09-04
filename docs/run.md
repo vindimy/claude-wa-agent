@@ -369,20 +369,22 @@ Q&A over history is on the roadmap (see the README).
 
 ## Summarizer adapters
 
-Three adapters exist today:
+Five adapters exist today:
 
 | Adapter | Auth in Docker | Notes |
 | --- | --- | --- |
 | `cli-claude` | `CLAUDE_CODE_OAUTH_TOKEN` in `.env` | Default. Owner-only (ADR 0003) |
 | `api-anthropic` | `ANTHROPIC_API_KEY` in `.env` | Default model `claude-opus-5`; `claude-sonnet-5` is about a fifth of the cost |
+| `api-openai` | `OPENAI_API_KEY` in `.env` | Default model `gpt-5.6-terra`; `gpt-5.6-luna` is about a tenth of the cost |
+| `api-google` | `GOOGLE_API_KEY` (or `GEMINI_API_KEY`) in `.env` | Default model `gemini-3.8-flash`; `gemini-3.1-pro-preview` for the larger model |
 | `fake` | none | Deterministic stats; for plumbing checks |
 
-**OpenAI and Gemini are not implemented yet.** `api-openai` and
-`api-google` are the next phase (README roadmap phase 7, GitHub issue #1).
-Nothing in
-`config.yaml` accepts them today; the config loader rejects an unknown
-adapter name at the first run with `unknown summarizer "…" (available:
-fake, cli-claude, api-anthropic)`.
+All three API adapters run the same prompt, keep the transcript's language
+mix, respect `summary.max_words`, and write a cost estimate into
+`runs.cost_usd` from the vendor's published per-token prices (null for a
+model not in the table). The config loader rejects an unknown adapter name
+at the first run with `unknown summarizer "…" (available: fake, cli-claude,
+api-anthropic, api-openai, api-google)`.
 
 ### Choosing an adapter per group
 
@@ -416,11 +418,11 @@ groups:
     summarizer: api-anthropic    # this group pays per token instead
 ```
 
-Both auth variables can be present in `.env` at the same time; each adapter
-reads only its own. When `api-openai` and `api-google` land they slot into
-the same `summarizers:` map and `summarizer:` key with `OPENAI_API_KEY` and
-`GOOGLE_API_KEY`, so a mixed config will look exactly like the one above
-with more names.
+All auth variables can be present in `.env` at the same time; each adapter
+reads only its own. `api-openai` and `api-google` slot into the same
+`summarizers:` map and `summarizer:` key with `OPENAI_API_KEY` and
+`GOOGLE_API_KEY`, so a group can be moved between vendors by changing one
+line.
 
 ## When something is off
 

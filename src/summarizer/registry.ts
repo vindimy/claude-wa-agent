@@ -1,5 +1,7 @@
 import { err, ok, type Result } from '../shared/index.js';
 import { createApiAnthropicSummarizer } from './api-anthropic.js';
+import { createApiGoogleSummarizer } from './api-google.js';
+import { createApiOpenAiSummarizer } from './api-openai.js';
 import { createClaudeCliSummarizer } from './cli-claude.js';
 import { createFakeSummarizer } from './fake.js';
 import type { AdapterOptions, Summarizer } from './types.js';
@@ -8,6 +10,8 @@ const FACTORIES: Record<string, (opts: AdapterOptions) => Summarizer> = {
   fake: () => createFakeSummarizer(),
   'cli-claude': createClaudeCliSummarizer,
   'api-anthropic': (opts) => createApiAnthropicSummarizer(opts),
+  'api-openai': (opts) => createApiOpenAiSummarizer(opts),
+  'api-google': (opts) => createApiGoogleSummarizer(opts),
 };
 
 export const ADAPTER_NAMES: readonly string[] = Object.keys(FACTORIES);

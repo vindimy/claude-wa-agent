@@ -12,7 +12,7 @@ day-to-day reference.
 | --- | --- | --- |
 | Process manager | pm2 or launchd | `docker compose`, `restart: unless-stopped` |
 | `claude` CLI auth | already logged in on the machine | `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token` |
-| API fallback | `SUMMARIZER=api-anthropic` + `ANTHROPIC_API_KEY` | same |
+| API fallback | `SUMMARIZER=api-anthropic` + `ANTHROPIC_API_KEY` (or `api-openai` + `OPENAI_API_KEY`, `api-google` + `GOOGLE_API_KEY`) | same |
 | Time zone | the OS | `TZ` in `.env`; cadences with an explicit `tz` ignore it |
 
 ## Host profile (pm2)

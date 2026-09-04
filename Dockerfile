@@ -9,6 +9,7 @@
 # Summarizer auth inside the container, pick one (see docs/deploy.md):
 #   CLAUDE_CODE_OAUTH_TOKEN=...   from `claude setup-token` on any logged-in machine
 #   SUMMARIZER=api-anthropic + ANTHROPIC_API_KEY=...   API-key fallback
+#   (or SUMMARIZER=api-openai + OPENAI_API_KEY, SUMMARIZER=api-google + GOOGLE_API_KEY)
 
 ARG NODE_VERSION=22
 

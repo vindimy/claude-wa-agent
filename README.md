@@ -41,7 +41,7 @@ One Node/TypeScript process, split into modules with typed boundaries:
 | `src/store/`     | SQLite via better-sqlite3: groups, messages (edits, soft deletes)      | ✅ done |
 | `src/config/`    | zod-validated `config.yaml` + env, per-group overrides over defaults   | ✅ done |
 | `src/cli/`       | `digest run`, `digest groups`, `digest summarize`                      | ✅ done |
-| `src/summarizer/`| Adapter interface; `fake`, `cli-claude`, and `api-anthropic` shipped, `cli-gemini`, `cli-codex` later | ✅ done |
+| `src/summarizer/`| Adapter interface; `fake`, `cli-claude`, `api-anthropic`, `api-openai`, and `api-google` shipped, `cli-gemini`, `cli-codex` later | ✅ done |
 | `src/delivery/`  | Idempotent fan-out: self-DM, Markdown vault, and opt-in group post through one outbox | ✅ done |
 | `src/scheduler/` | Daily / weekly / threshold triggers, `/digest` commands, restart-safe watermarks | ✅ done |
 
@@ -223,6 +223,8 @@ treated as commands; history sync is ignored.
 | ------------ | ------------------------------------------------------------------------------- |
 | `cli-claude` | Spawns `claude -p` with the transcript on stdin: no tools, no session files, no settings pickup. Uses your existing CLI login. Owner-only. |
 | `api-anthropic` | Calls the Anthropic Messages API with `ANTHROPIC_API_KEY`. Default model `claude-opus-5`; set `summarizers.api-anthropic.model` to `claude-sonnet-5` for a cheaper run. Server-side refusal fallbacks are on. |
+| `api-openai` | Calls the OpenAI Responses API with `OPENAI_API_KEY`. Default model `gpt-5.6-terra`; `gpt-5.6-luna` is about a tenth of the cost, `gpt-5.6-sol` the flagship. Responses are not stored on OpenAI's side. |
+| `api-google` | Calls the Gemini API with `GOOGLE_API_KEY` (or `GEMINI_API_KEY`). Default model `gemini-3.8-flash`; `gemini-3.1-pro-preview` for the larger model. Thinking tokens are billed as output and counted in the cost estimate. |
 | `fake`       | Deterministic stats-only output with no external call. For tests and plumbing. |
 
 The prompt asks for plain WhatsApp-friendly text, keeps the transcript's
@@ -239,9 +241,11 @@ environment forces one adapter for every group without editing the file.
 | `DATA_DIR`    | `./data`        | SQLite DB (`digest.db`) and WhatsApp auth    |
 | `VAULT_DIR`   | `config.vault.dir` (`./vault`) | Where Markdown notes are written |
 | `LOG_LEVEL`   | `info`          | pino level: `trace` … `fatal`                |
-| `SUMMARIZER`  | from config     | Force one adapter for every group (`api-anthropic`, `cli-claude`, `fake`) |
+| `SUMMARIZER`  | from config     | Force one adapter for every group (`api-anthropic`, `api-openai`, `api-google`, `cli-claude`, `fake`) |
 | `CLAUDE_CODE_OAUTH_TOKEN` | unset | Headless login for `cli-claude`, from `claude setup-token`. Owner-only. |
 | `ANTHROPIC_API_KEY` | unset     | Key for `api-anthropic`                       |
+| `OPENAI_API_KEY` | unset        | Key for `api-openai`                          |
+| `GOOGLE_API_KEY` | unset        | Key for `api-google` (`GEMINI_API_KEY` also works) |
 | `TZ`          | system          | Fallback time zone for cadences without `tz` (set it in Docker) |
 
 A `.env` in the working directory is loaded automatically if present.
@@ -253,7 +257,7 @@ override any of `summarizer`, `cadence`, `deliver`, or `summary`.
 
 ```yaml
 defaults:
-  summarizer: cli-claude        # fake | cli-claude
+  summarizer: cli-claude        # fake | cli-claude | api-anthropic | api-openai | api-google
   cadence: { type: daily, at: "08:00", tz: "America/Los_Angeles" }
   deliver: { self_dm: true, group: false, vault: true }
   summary: { language: auto, style: topics, max_words: 300 }
@@ -382,7 +386,7 @@ better-sqlite3, zod 4, pino, commander, vitest, biome.
 4. ✅ **Scheduler** — daily / weekly / threshold cadences, `/digest`, restart-safe watermarks
 5. ✅ **Group posting** (opt-in) behind the send queue and rate limits
 6. ✅ **Docker profile** for a VPS, with headless CLI auth or the `api-anthropic` fallback
-7. **OpenAI and Gemini adapters** — `api-openai` and `api-google`, mixable per group
+7. ✅ **OpenAI and Gemini adapters** — `api-openai` and `api-google`, mixable per group
 8. Nice-to-have: action items, `/ask <group> <question>`, local dashboard
 
 Design decisions are recorded in `docs/adr/`.
