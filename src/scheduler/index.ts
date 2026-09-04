@@ -1,4 +1,12 @@
 export {
+  type Answer,
+  type AskError,
+  type AskRequest,
+  type AskResult,
+  askQuestion,
+  describeAskError,
+} from './ask.js';
+export {
   type DueDecision,
   decideDue,
   defaultLookbackS,

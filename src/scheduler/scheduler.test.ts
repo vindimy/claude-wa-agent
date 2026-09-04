@@ -164,6 +164,26 @@ describe('scheduler', () => {
     s.stop();
   });
 
+  it('answers /ask with a private reply and records the question', async () => {
+    seed(store, G2, NOW - 120, 5);
+    const s = start();
+    await s.handleCommand('/ask Family 1d who wrote the most?');
+    const queued = store.queuedDeliveries('owner');
+    expect(queued).toHaveLength(1);
+    expect(queued[0]?.channel).toBe('self_dm');
+    expect(queued[0]?.text).toContain('🤖 Family');
+    expect(queued[0]?.text).toContain('[fake answer] who wrote the most?');
+    expect(queued[0]?.createdTs).toBe(NOW);
+    expect(store.listQuestions('owner', 5)[0]?.question).toBe('who wrote the most?');
+    expect(store.recentRuns('owner', G2, 0)).toHaveLength(0);
+
+    await s.handleCommand('/ask Family 1m anything new?');
+    expect(store.queuedDeliveries('owner').at(-1)?.text).toContain('no messages');
+    await s.handleCommand('/ask Nope what?');
+    expect(store.queuedDeliveries('owner').at(-1)?.text).toContain('Unknown group');
+    s.stop();
+  });
+
   it('posts into an opted-in group on a scheduled run but not on /digest', async () => {
     config = configSchema.parse({
       defaults: { summarizer: 'fake' },

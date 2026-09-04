@@ -81,6 +81,27 @@ export interface RunRecord {
   createdTs: number;
 }
 
+export type QuestionStatus = 'ok' | 'error';
+
+/** One `/ask` question and its answer (or failure). */
+export interface QuestionRecord {
+  tenantId: string;
+  id: string;
+  groupJid: string;
+  question: string;
+  answer: string | null;
+  sinceTs: number;
+  untilTs: number;
+  messageCount: number;
+  adapter: string;
+  model: string | null;
+  status: QuestionStatus;
+  error: string | null;
+  costUsd: number | null;
+  durationMs: number | null;
+  createdTs: number;
+}
+
 export interface DeliveryRow {
   tenantId: string;
   summaryId: string;
@@ -145,6 +166,24 @@ interface RawRunRow {
   watermark_ts: number | null;
   watermark_id: string | null;
   summary_id: string | null;
+  adapter: string;
+  model: string | null;
+  status: string;
+  error: string | null;
+  cost_usd: number | null;
+  duration_ms: number | null;
+  created_ts: number;
+}
+
+interface RawQuestionRow {
+  tenant_id: string;
+  id: string;
+  group_jid: string;
+  question: string;
+  answer: string | null;
+  since_ts: number;
+  until_ts: number;
+  message_count: number;
   adapter: string;
   model: string | null;
   status: string;
@@ -320,6 +359,37 @@ export class Store {
     return r.changes;
   }
 
+  /**
+   * Non-deleted messages per local day for one group, from `sinceTs` on.
+   * Day boundaries follow `tz`; the dashboard draws activity from this.
+   */
+  messageCountsByDay(
+    tenantId: string,
+    groupJid: string,
+    sinceTs: number,
+    tz: string,
+  ): Array<{ day: string; count: number }> {
+    const rows = this.db
+      .prepare(
+        `SELECT ts FROM messages
+         WHERE tenant_id = ? AND group_jid = ? AND ts >= ? AND deleted = 0
+         ORDER BY ts`,
+      )
+      .all(tenantId, groupJid, sinceTs) as Array<{ ts: number }>;
+    const fmt = new Intl.DateTimeFormat('en-CA', {
+      timeZone: tz,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    });
+    const counts = new Map<string, number>();
+    for (const r of rows) {
+      const day = fmt.format(new Date(r.ts * 1000));
+      counts.set(day, (counts.get(day) ?? 0) + 1);
+    }
+    return [...counts.entries()].map(([day, count]) => ({ day, count }));
+  }
+
   // --- summaries -----------------------------------------------------------
 
   /** Insert or replace the text for a summary id (replace = `--fresh`). */
@@ -346,6 +416,23 @@ export class Store {
       .prepare('SELECT * FROM summaries WHERE tenant_id = ? AND id = ?')
       .get(tenantId, id) as RawSummaryRow | undefined;
     return r ? toSummaryRecord(r) : undefined;
+  }
+
+  /** Newest summaries for this tenant across groups, each with its delivery rows. */
+  listSummaries(
+    tenantId: string,
+    limit: number,
+  ): Array<SummaryRecord & { deliveries: DeliveryRow[] }> {
+    const rows = this.db
+      .prepare('SELECT * FROM summaries WHERE tenant_id = ? ORDER BY created_ts DESC LIMIT ?')
+      .all(tenantId, limit) as RawSummaryRow[];
+    const byChannel = this.db.prepare(
+      'SELECT * FROM deliveries WHERE tenant_id = ? AND summary_id = ? ORDER BY channel',
+    );
+    return rows.map((r) => ({
+      ...toSummaryRecord(r),
+      deliveries: (byChannel.all(tenantId, r.id) as RawDeliveryRow[]).map(toDeliveryRow),
+    }));
   }
 
   // --- runs ----------------------------------------------------------------
@@ -389,6 +476,35 @@ export class Store {
       )
       .all(tenantId, groupJid, sinceTs) as RawRunRow[];
     return rows.map(toRunRecord);
+  }
+
+  /** Newest runs for this tenant across groups, dry runs included. */
+  listRuns(tenantId: string, limit: number): RunRecord[] {
+    const rows = this.db
+      .prepare('SELECT * FROM runs WHERE tenant_id = ? ORDER BY created_ts DESC LIMIT ?')
+      .all(tenantId, limit) as RawRunRow[];
+    return rows.map(toRunRecord);
+  }
+
+  // --- questions -----------------------------------------------------------
+
+  insertQuestion(q: QuestionRecord): void {
+    this.db
+      .prepare(
+        `INSERT INTO questions (tenant_id, id, group_jid, question, answer, since_ts, until_ts,
+           message_count, adapter, model, status, error, cost_usd, duration_ms, created_ts)
+         VALUES (@tenantId, @id, @groupJid, @question, @answer, @sinceTs, @untilTs,
+           @messageCount, @adapter, @model, @status, @error, @costUsd, @durationMs, @createdTs)`,
+      )
+      .run({ ...q });
+  }
+
+  /** Newest questions for this tenant across groups. */
+  listQuestions(tenantId: string, limit: number): QuestionRecord[] {
+    const rows = this.db
+      .prepare('SELECT * FROM questions WHERE tenant_id = ? ORDER BY created_ts DESC LIMIT ?')
+      .all(tenantId, limit) as RawQuestionRow[];
+    return rows.map(toQuestionRecord);
   }
 
   // --- deliveries ----------------------------------------------------------
@@ -443,6 +559,21 @@ export class Store {
       .prepare(
         `SELECT * FROM deliveries WHERE tenant_id = ? AND status = 'queued'
          ORDER BY created_ts LIMIT ?`,
+      )
+      .all(tenantId, limit) as RawDeliveryRow[];
+    return rows.map(toDeliveryRow);
+  }
+
+  /** Newest delivery rows for this tenant; `unsentOnly` keeps queued and failed. */
+  listDeliveries(
+    tenantId: string,
+    limit: number,
+    opts: { unsentOnly?: boolean } = {},
+  ): DeliveryRow[] {
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM deliveries WHERE tenant_id = ? ${opts.unsentOnly ? "AND status != 'sent'" : ''}
+         ORDER BY created_ts DESC LIMIT ?`,
       )
       .all(tenantId, limit) as RawDeliveryRow[];
     return rows.map(toDeliveryRow);
@@ -541,6 +672,26 @@ function toRunRecord(r: RawRunRow): RunRecord {
     adapter: r.adapter,
     model: r.model,
     status: r.status as RunStatus,
+    error: r.error,
+    costUsd: r.cost_usd,
+    durationMs: r.duration_ms,
+    createdTs: r.created_ts,
+  };
+}
+
+function toQuestionRecord(r: RawQuestionRow): QuestionRecord {
+  return {
+    tenantId: r.tenant_id,
+    id: r.id,
+    groupJid: r.group_jid,
+    question: r.question,
+    answer: r.answer,
+    sinceTs: r.since_ts,
+    untilTs: r.until_ts,
+    messageCount: r.message_count,
+    adapter: r.adapter,
+    model: r.model,
+    status: r.status as QuestionStatus,
     error: r.error,
     costUsd: r.cost_usd,
     durationMs: r.duration_ms,

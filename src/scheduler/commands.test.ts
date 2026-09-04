@@ -54,3 +54,44 @@ describe('parseCommand', () => {
     expect(helpText(cfg)).toContain('- Family');
   });
 });
+
+describe('parseCommand /ask', () => {
+  it('takes a group, an optional window, and the rest as the question', () => {
+    expect(parseCommand('/ask Family when is the dacha trip?')).toEqual({
+      kind: 'ask',
+      groupRef: 'Family',
+      sinceSpec: undefined,
+      question: 'when is the dacha trip?',
+    });
+    expect(parseCommand('/ask Family 2w when is the dacha trip?')).toEqual({
+      kind: 'ask',
+      groupRef: 'Family',
+      sinceSpec: '2w',
+      question: 'when is the dacha trip?',
+    });
+    expect(parseCommand('/ask "Zouk team" who owns the deck?')).toMatchObject({
+      kind: 'ask',
+      groupRef: 'Zouk team',
+      question: 'who owns the deck?',
+    });
+  });
+
+  it('keeps the question verbatim, including quotes and windows inside it', () => {
+    expect(parseCommand('/ask Family did "Masha" say 2d or 3d?')).toMatchObject({
+      kind: 'ask',
+      sinceSpec: undefined,
+      question: 'did "Masha" say 2d or 3d?',
+    });
+  });
+
+  it('rejects a missing group or question', () => {
+    expect(parseCommand('/ask')).toMatchObject({ kind: 'invalid' });
+    expect(parseCommand('/ask Family')).toMatchObject({ kind: 'invalid' });
+    expect(parseCommand('/ask Family 2w')).toMatchObject({ kind: 'invalid' });
+  });
+
+  it('lists /ask in the help text', () => {
+    const cfg = configSchema.parse({ groups: [{ jid: '1@g.us', name: 'Family' }] });
+    expect(helpText(cfg)).toContain('/ask <group>');
+  });
+});

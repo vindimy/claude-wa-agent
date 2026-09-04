@@ -3,6 +3,7 @@ import { parseSince } from '../cli/since.js';
 import { type Config, type ResolvedGroupConfig, resolveGroupConfig } from '../config/index.js';
 import { createLogger } from '../shared/index.js';
 import type { Store } from '../store/index.js';
+import { askQuestion, describeAskError } from './ask.js';
 import { type DueDecision, decideDue, type GroupScheduleState, windowSince } from './cadence.js';
 import { type DigestCommand, helpText, parseCommand } from './commands.js';
 import { type DigestRequest, describeDigestError, runDigest } from './run-digest.js';
@@ -190,6 +191,7 @@ export function startScheduler(opts: SchedulerOptions): SchedulerHandle {
     if (!cmd) return;
     if (cmd.kind === 'help') return queueReply(helpText(config));
     if (cmd.kind === 'invalid') return queueReply(`🤖 ${cmd.message}. Send /help for usage.`);
+    if (cmd.kind === 'ask') return handleAsk(cmd);
 
     const nowTs = Math.floor(now() / 1000);
     let targets = groups();
@@ -215,6 +217,46 @@ export function startScheduler(opts: SchedulerOptions): SchedulerHandle {
       else if (r === 'error') lines.push(`${group.name ?? group.jid}: failed, see logs`);
     }
     if (lines.length > 0) queueReply(`🤖 ${lines.join('\n')}`);
+  }
+
+  async function handleAsk(cmd: Extract<DigestCommand, { kind: 'ask' }>): Promise<void> {
+    const nowTs = Math.floor(now() / 1000);
+    const group = findGroup(cmd.groupRef);
+    if (!group) return queueReply(`🤖 Unknown group "${cmd.groupRef}". Send /help to list groups.`);
+    let sinceTs = 0;
+    if (cmd.sinceSpec) {
+      const parsed = parseSince(cmd.sinceSpec, nowTs);
+      if (!parsed.ok) return queueReply(`🤖 Bad window "${cmd.sinceSpec}". Use 12h, 2d, 1w.`);
+      sinceTs = parsed.value;
+    }
+    const name = group.name ?? group.jid;
+    log.info({ group: group.jid, since: cmd.sinceSpec }, 'owner question');
+    const groupTz = 'tz' in group.cadence && group.cadence.tz ? group.cadence.tz : tz;
+    const r = await askQuestion({
+      tenantId,
+      store,
+      config,
+      group,
+      question: cmd.question,
+      sinceTs,
+      untilTs: nowTs,
+      tz: groupTz,
+      now,
+      summarizerFactory: opts.summarizerFactory,
+    });
+    if (!r.ok) {
+      log.error({ group: group.jid, error: r.error }, describeAskError(r.error));
+      return queueReply(`🤖 ${name}: could not answer (${describeAskError(r.error)})`);
+    }
+    if (r.value.kind === 'empty') {
+      const span = cmd.sinceSpec ? `in the last ${cmd.sinceSpec}` : 'stored';
+      return queueReply(`🤖 ${name}: no messages ${span} to answer from.`);
+    }
+    const n = r.value.answer.messageCount;
+    const header = `🤖 ${name} · ${n === 1 ? '1 message' : `${n} messages`}${
+      cmd.sinceSpec ? ` over ${cmd.sinceSpec}` : ''
+    }`;
+    queueReply(`${header}\nQ: ${cmd.question}\n\n${r.value.answer.text}`);
   }
 
   function describe() {

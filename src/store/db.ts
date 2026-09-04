@@ -125,6 +125,29 @@ const MIGRATIONS: string[] = [
   );
   CREATE INDEX idx_deliveries_tenant_status ON deliveries (tenant_id, status, created_ts);
   `,
+  // 004 — questions asked over stored history (/ask). Separate from runs so
+  // a question never touches a group's digest watermark.
+  `
+  CREATE TABLE questions (
+    tenant_id TEXT NOT NULL,
+    id TEXT NOT NULL,
+    group_jid TEXT NOT NULL,
+    question TEXT NOT NULL,
+    answer TEXT,
+    since_ts INTEGER NOT NULL,
+    until_ts INTEGER NOT NULL,
+    message_count INTEGER NOT NULL,
+    adapter TEXT NOT NULL,
+    model TEXT,
+    status TEXT NOT NULL,
+    error TEXT,
+    cost_usd REAL,
+    duration_ms INTEGER,
+    created_ts INTEGER NOT NULL,
+    PRIMARY KEY (tenant_id, id)
+  );
+  CREATE INDEX idx_questions_tenant_created ON questions (tenant_id, created_ts);
+  `,
 ];
 
 export const MIGRATION_COUNT = MIGRATIONS.length;

@@ -1,5 +1,12 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { type NewMessage, type RunRecord, Store, type SummaryRecord, summaryId } from './store.js';
+import {
+  type NewMessage,
+  type QuestionRecord,
+  type RunRecord,
+  Store,
+  type SummaryRecord,
+  summaryId,
+} from './store.js';
 
 const T = 'owner';
 
@@ -351,5 +358,201 @@ describe('Store: scheduler helpers', () => {
     store.upsertGroup({ tenantId: T, jid: 'g1@g.us', subject: 'One', seenTs: 5 });
     expect(store.getGroup(T, 'g1@g.us')?.firstSeenTs).toBe(5);
     expect(store.getGroup('acme', 'g1@g.us')).toBeUndefined();
+  });
+});
+
+describe('Store: questions', () => {
+  const question = (overrides: Partial<QuestionRecord> = {}): QuestionRecord => ({
+    tenantId: T,
+    id: 'q1',
+    groupJid: 'g1@g.us',
+    question: 'Who owns the deck?',
+    answer: 'Lena does.',
+    sinceTs: 0,
+    untilTs: 200,
+    messageCount: 12,
+    adapter: 'fake',
+    model: null,
+    status: 'ok',
+    error: null,
+    costUsd: 0,
+    durationMs: 5,
+    createdTs: 200,
+    ...overrides,
+  });
+
+  it('records questions and lists them newest first per tenant', () => {
+    const store = new Store(':memory:');
+    store.insertQuestion(question({ id: 'q1', createdTs: 100 }));
+    store.insertQuestion(
+      question({ id: 'q2', createdTs: 300, answer: null, status: 'error', error: 'boom' }),
+    );
+    store.insertQuestion(question({ id: 'q3', tenantId: 'acme', createdTs: 400 }));
+    const got = store.listQuestions(T, 10);
+    expect(got.map((q) => q.id)).toEqual(['q2', 'q1']);
+    expect(got[0]).toMatchObject({ status: 'error', error: 'boom', answer: null });
+    expect(got[1]).toMatchObject({
+      question: 'Who owns the deck?',
+      answer: 'Lena does.',
+      costUsd: 0,
+    });
+    expect(store.listQuestions(T, 1)).toHaveLength(1);
+    expect(store.listQuestions('acme', 10).map((q) => q.id)).toEqual(['q3']);
+  });
+
+  it('never advances a group watermark', () => {
+    const store = new Store(':memory:');
+    store.insertQuestion(question());
+    expect(store.lastWatermark(T, 'g1@g.us')).toBeUndefined();
+  });
+});
+
+describe('Store: dashboard reads', () => {
+  let store: Store;
+  beforeEach(() => {
+    store = new Store(':memory:');
+  });
+
+  const run = (o: Partial<RunRecord>): RunRecord => ({
+    tenantId: T,
+    id: o.id ?? 'r',
+    groupJid: 'g1@g.us',
+    trigger: 'daily',
+    dryRun: false,
+    sinceTs: 0,
+    untilTs: 10,
+    messageCount: 1,
+    watermarkTs: 9,
+    watermarkId: 'M',
+    summaryId: 's',
+    adapter: 'fake',
+    model: null,
+    status: 'ok',
+    error: null,
+    costUsd: 0.01,
+    durationMs: 10,
+    createdTs: 10,
+    ...o,
+  });
+
+  const summary = (o: Partial<SummaryRecord> = {}): SummaryRecord => ({
+    tenantId: T,
+    id: 's',
+    groupJid: 'g1@g.us',
+    sinceTs: 0,
+    untilTs: 10,
+    watermarkTs: 9,
+    watermarkId: 'M',
+    messageCount: 1,
+    adapter: 'fake',
+    model: null,
+    text: 'text',
+    createdTs: 10,
+    ...o,
+  });
+
+  it('lists runs across groups newest first, including dry runs, per tenant', () => {
+    store.insertRun(run({ id: 'a', groupJid: 'g1@g.us', createdTs: 10 }));
+    store.insertRun(run({ id: 'b', groupJid: 'g2@g.us', createdTs: 30, dryRun: true }));
+    store.insertRun(run({ id: 'c', groupJid: 'g1@g.us', createdTs: 20 }));
+    store.insertRun(run({ id: 'z', tenantId: 'acme', createdTs: 99 }));
+    expect(store.listRuns(T, 10).map((r) => r.id)).toEqual(['b', 'c', 'a']);
+    expect(store.listRuns(T, 2).map((r) => r.id)).toEqual(['b', 'c']);
+  });
+
+  it('lists summaries newest first with their delivery rows', () => {
+    store.upsertSummary(summary({ id: 's1', createdTs: 10 }));
+    store.upsertSummary(summary({ id: 's2', createdTs: 20, groupJid: 'g2@g.us' }));
+    store.upsertSummary(summary({ id: 's9', tenantId: 'acme', createdTs: 30 }));
+    store.putDelivery({
+      tenantId: T,
+      summaryId: 's1',
+      channel: 'vault',
+      status: 'sent',
+      target: 'a.md',
+      createdTs: 10,
+      sentTs: 10,
+    });
+    store.putDelivery({
+      tenantId: T,
+      summaryId: 's1',
+      channel: 'self_dm',
+      status: 'queued',
+      text: 'x',
+      createdTs: 10,
+    });
+    const got = store.listSummaries(T, 10);
+    expect(got.map((s) => s.id)).toEqual(['s2', 's1']);
+    expect(got[1]?.deliveries.map((d) => [d.channel, d.status])).toEqual([
+      ['self_dm', 'queued'],
+      ['vault', 'sent'],
+    ]);
+    expect(got[0]?.deliveries).toEqual([]);
+  });
+
+  it('lists recent deliveries newest first, optionally only the unsent ones', () => {
+    store.putDelivery({
+      tenantId: T,
+      summaryId: 's1',
+      channel: 'vault',
+      status: 'sent',
+      target: 'a.md',
+      createdTs: 10,
+      sentTs: 10,
+    });
+    store.putDelivery({
+      tenantId: T,
+      summaryId: 's2',
+      channel: 'self_dm',
+      status: 'queued',
+      text: 'x',
+      createdTs: 20,
+    });
+    store.putDelivery({
+      tenantId: T,
+      summaryId: 's3',
+      channel: 'group',
+      status: 'failed',
+      text: 'y',
+      createdTs: 30,
+    });
+    store.putDelivery({
+      tenantId: 'acme',
+      summaryId: 's4',
+      channel: 'self_dm',
+      status: 'queued',
+      text: 'z',
+      createdTs: 40,
+    });
+    expect(store.listDeliveries(T, 10).map((d) => d.summaryId)).toEqual(['s3', 's2', 's1']);
+    expect(store.listDeliveries(T, 10, { unsentOnly: true }).map((d) => d.summaryId)).toEqual([
+      's3',
+      's2',
+    ]);
+  });
+
+  it('counts messages per day for a group inside a window', () => {
+    const day = 86_400;
+    const base = 1_756_800_000; // 2025-09-02 08:00 UTC
+    const msg = (id: string, ts: number, groupJid = 'g1@g.us'): NewMessage => ({
+      tenantId: T,
+      groupJid,
+      id,
+      senderJid: 'a@s.whatsapp.net',
+      senderName: 'A',
+      ts,
+      kind: 'text',
+      body: 'hi',
+    });
+    store.insertMessage(msg('1', base));
+    store.insertMessage(msg('2', base + 60));
+    store.insertMessage(msg('3', base + day));
+    store.insertMessage(msg('4', base + 3 * day));
+    store.insertMessage(msg('5', base + day, 'g2@g.us'));
+    store.markDeleted(T, 'g1@g.us', '4');
+    expect(store.messageCountsByDay(T, 'g1@g.us', base - 1, 'UTC')).toEqual([
+      { day: '2025-09-02', count: 2 },
+      { day: '2025-09-03', count: 1 },
+    ]);
   });
 });

@@ -13,6 +13,8 @@ import {
 import { type DeliveryOutcome, startOutbox } from '../delivery/index.js';
 import { startListener } from '../listener/index.js';
 import {
+  askQuestion,
+  describeAskError,
   describeDigestError,
   runDigest,
   startScheduler,
@@ -273,6 +275,75 @@ program
         }
         for (const o of outcomes) console.log(formatOutcome(o));
         if (outcomes.some((o) => o.outcome === 'error')) process.exit(1);
+      } finally {
+        store.close();
+      }
+    },
+  );
+
+program
+  .command('ask')
+  .description('answer a question about one group from its stored messages (nothing is sent)')
+  .argument('<group>', 'group JID, configured name, or subject')
+  .argument('<question...>', 'the question, in any language')
+  .option('--since <window>', 'relative span (12h, 2d, 1w) or ISO date; default: everything stored')
+  .option('--adapter <name>', `summarizer adapter (${ADAPTER_NAMES.join(', ')})`)
+  .option('--tz <zone>', 'IANA time zone for transcript timestamps')
+  .action(
+    async (
+      groupRef: string,
+      questionWords: string[],
+      opts: { since?: string; adapter?: string; tz?: string },
+    ) => {
+      const config = loadConfigOrExit();
+      const store = new Store(dbPath);
+      try {
+        const group = findGroup(config, store, groupRef);
+        if (!group) {
+          const known = config.groups.map((g) => `  ${g.jid}  ${g.name ?? ''}`).join('\n');
+          console.error(
+            `Unknown or non-allow-listed group "${groupRef}". Configured groups:\n${known}`,
+          );
+          process.exit(1);
+        }
+        const nowTs = Math.floor(Date.now() / 1000);
+        let sinceTs = 0;
+        if (opts.since) {
+          const since = parseSince(opts.since, nowTs);
+          if (!since.ok) {
+            console.error(`Bad --since "${opts.since}": use 30m, 12h, 2d, 1w or an ISO date.`);
+            process.exit(1);
+          }
+          sinceTs = since.value;
+        }
+        const cadenceTz = 'tz' in group.cadence ? group.cadence.tz : undefined;
+        const result = await askQuestion({
+          tenantId,
+          store,
+          config,
+          group,
+          question: questionWords.join(' '),
+          sinceTs,
+          untilTs: nowTs,
+          tz: opts.tz ?? cadenceTz ?? systemTimeZone(),
+          adapter: opts.adapter,
+        });
+        if (!result.ok) {
+          log.error({ error: result.error }, describeAskError(result.error));
+          process.exit(1);
+        }
+        if (result.value.kind === 'empty') {
+          console.log(
+            `No messages stored for ${group.name ?? group.jid}${opts.since ? ` since ${opts.since}` : ''}.`,
+          );
+          return;
+        }
+        const { answer } = result.value;
+        console.log(`\n${answer.text}\n`);
+        const cost = answer.costUsd === null ? 'n/a' : `$${answer.costUsd.toFixed(4)}`;
+        console.log(
+          `(${answer.messageCount} messages · ${answer.adapter}${answer.model ? ` / ${answer.model}` : ''} · ${Math.round(answer.durationMs / 1000)}s · cost ${cost})`,
+        );
       } finally {
         store.close();
       }

@@ -8,6 +8,8 @@ export {
   type MessageKind,
   type MessageRow,
   type NewMessage,
+  type QuestionRecord,
+  type QuestionStatus,
   type RunRecord,
   type RunStatus,
   type RunTrigger,
