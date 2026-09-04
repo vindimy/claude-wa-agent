@@ -262,3 +262,40 @@ describe('Store: summaries, runs, deliveries', () => {
     expect(store.countSentSince(T, 0)).toBe(3);
   });
 });
+
+describe('Store: scheduler helpers', () => {
+  it('returns recent non-dry runs newest first and looks up a group', () => {
+    const store = new Store(':memory:');
+    const base: RunRecord = {
+      tenantId: T,
+      id: 'a',
+      groupJid: 'g1@g.us',
+      trigger: 'daily',
+      dryRun: false,
+      sinceTs: 0,
+      untilTs: 1,
+      messageCount: 0,
+      watermarkTs: null,
+      watermarkId: null,
+      summaryId: null,
+      adapter: 'fake',
+      model: null,
+      status: 'empty',
+      error: null,
+      costUsd: null,
+      durationMs: null,
+      createdTs: 100,
+    };
+    store.insertRun(base);
+    store.insertRun({ ...base, id: 'b', createdTs: 300, status: 'ok' });
+    store.insertRun({ ...base, id: 'c', createdTs: 200, dryRun: true });
+    store.insertRun({ ...base, id: 'd', createdTs: 400, tenantId: 'acme' });
+    expect(store.recentRuns(T, 'g1@g.us', 0).map((r) => r.id)).toEqual(['b', 'a']);
+    expect(store.recentRuns(T, 'g1@g.us', 250).map((r) => r.id)).toEqual(['b']);
+    expect(store.recentRuns(T, 'g1@g.us', 0)[0]?.status).toBe('ok');
+
+    store.upsertGroup({ tenantId: T, jid: 'g1@g.us', subject: 'One', seenTs: 5 });
+    expect(store.getGroup(T, 'g1@g.us')?.firstSeenTs).toBe(5);
+    expect(store.getGroup('acme', 'g1@g.us')).toBeUndefined();
+  });
+});

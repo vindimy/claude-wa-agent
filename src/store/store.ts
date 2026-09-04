@@ -39,7 +39,7 @@ export interface GroupRow {
   lastMessageTs: number | null;
 }
 
-export type RunTrigger = 'manual' | 'daily' | 'weekly' | 'threshold';
+export type RunTrigger = 'manual' | 'command' | 'daily' | 'weekly' | 'threshold';
 export type RunStatus = 'ok' | 'error' | 'empty';
 export type DeliveryChannel = 'self_dm' | 'vault' | 'group';
 export type DeliveryStatus = 'queued' | 'sent' | 'failed';
@@ -133,6 +133,27 @@ interface RawSummaryRow {
   created_ts: number;
 }
 
+interface RawRunRow {
+  tenant_id: string;
+  id: string;
+  group_jid: string;
+  trigger: string;
+  dry_run: number;
+  since_ts: number;
+  until_ts: number;
+  message_count: number;
+  watermark_ts: number | null;
+  watermark_id: string | null;
+  summary_id: string | null;
+  adapter: string;
+  model: string | null;
+  status: string;
+  error: string | null;
+  cost_usd: number | null;
+  duration_ms: number | null;
+  created_ts: number;
+}
+
 interface RawDeliveryRow {
   tenant_id: string;
   summary_id: string;
@@ -187,6 +208,10 @@ export class Store {
         participantCount: g.participantCount ?? null,
         seenTs: g.seenTs,
       });
+  }
+
+  getGroup(tenantId: string, jid: string): GroupRow | undefined {
+    return this.listGroups(tenantId).find((g) => g.jid === jid);
   }
 
   listGroups(tenantId: string): GroupRow[] {
@@ -343,6 +368,18 @@ export class Store {
     return r ? { watermarkTs: r.watermark_ts, watermarkId: r.watermark_id } : undefined;
   }
 
+  /** Non-dry runs for a group created at or after `sinceTs`, newest first. */
+  recentRuns(tenantId: string, groupJid: string, sinceTs: number): RunRecord[] {
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM runs
+         WHERE tenant_id = ? AND group_jid = ? AND dry_run = 0 AND created_ts >= ?
+         ORDER BY created_ts DESC`,
+      )
+      .all(tenantId, groupJid, sinceTs) as RawRunRow[];
+    return rows.map(toRunRecord);
+  }
+
   // --- deliveries ----------------------------------------------------------
 
   getDelivery(
@@ -462,6 +499,29 @@ function toSummaryRecord(r: RawSummaryRow): SummaryRecord {
     adapter: r.adapter,
     model: r.model,
     text: r.text,
+    createdTs: r.created_ts,
+  };
+}
+
+function toRunRecord(r: RawRunRow): RunRecord {
+  return {
+    tenantId: r.tenant_id,
+    id: r.id,
+    groupJid: r.group_jid,
+    trigger: r.trigger as RunTrigger,
+    dryRun: r.dry_run === 1,
+    sinceTs: r.since_ts,
+    untilTs: r.until_ts,
+    messageCount: r.message_count,
+    watermarkTs: r.watermark_ts,
+    watermarkId: r.watermark_id,
+    summaryId: r.summary_id,
+    adapter: r.adapter,
+    model: r.model,
+    status: r.status as RunStatus,
+    error: r.error,
+    costUsd: r.cost_usd,
+    durationMs: r.duration_ms,
     createdTs: r.created_ts,
   };
 }

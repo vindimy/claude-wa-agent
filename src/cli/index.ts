@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import { join, resolve } from 'node:path';
 import { Command } from 'commander';
 import {
@@ -8,12 +7,19 @@ import {
   loadConfig,
   type ResolvedGroupConfig,
   resolveGroupConfig,
+  type SummaryOptions,
 } from '../config/index.js';
-import { type DeliveryOutcome, deliverSummary, startOutbox } from '../delivery/index.js';
+import { type DeliveryOutcome, startOutbox } from '../delivery/index.js';
 import { startListener } from '../listener/index.js';
+import {
+  describeDigestError,
+  runDigest,
+  startScheduler,
+  systemTimeZone,
+} from '../scheduler/index.js';
 import { createLogger, migrateLegacyAuthDir, OWNER_TENANT_ID } from '../shared/index.js';
-import { Store, type SummaryRecord, summaryId } from '../store/index.js';
-import { ADAPTER_NAMES, createSummarizer, type SummarizerError } from '../summarizer/index.js';
+import { Store } from '../store/index.js';
+import { ADAPTER_NAMES } from '../summarizer/index.js';
 import { parseSince } from './since.js';
 
 try {
@@ -65,7 +71,15 @@ program
       { tenant_id: tenantId, configPath, dataDir, allowedGroups: config.groups.length },
       'starting listener',
     );
-    const listener = await startListener({ tenantId, config, store, dataDir });
+    const vaultDir = resolve(process.env.VAULT_DIR ?? config.vault.dir);
+    const scheduler = startScheduler({ tenantId, config, store, vaultDir });
+    const listener = await startListener({
+      tenantId,
+      config,
+      store,
+      dataDir,
+      onCommand: (cmd) => void scheduler.handleCommand(cmd.text),
+    });
     const outbox = startOutbox({
       tenantId,
       store,
@@ -75,6 +89,7 @@ program
 
     const shutdown = async (signal: string) => {
       log.info({ signal }, 'shutting down');
+      scheduler.stop();
       outbox.stop();
       await listener.stop();
       store.close();
@@ -131,23 +146,6 @@ function findGroup(config: Config, store: Store, ref: string): ResolvedGroupConf
   const first = bySubject[0];
   if (bySubject.length === 1 && first) return resolveGroupConfig(config, first.jid);
   return undefined;
-}
-
-function formatSummarizerError(e: SummarizerError): string {
-  switch (e.tag) {
-    case 'empty':
-      return 'no messages to summarize';
-    case 'spawn':
-      return `cannot start ${e.bin}: ${e.message}`;
-    case 'timeout':
-      return `${e.bin} did not finish within ${Math.round(e.timeoutMs / 1000)}s`;
-    case 'exit':
-      return `${e.bin} exited with code ${e.code}: ${e.stderr.trim() || '(no stderr)'}`;
-    case 'parse':
-      return `could not parse adapter output: ${e.message}`;
-    case 'model':
-      return `adapter error: ${e.message}`;
-  }
 }
 
 function formatOutcome(o: DeliveryOutcome): string {
@@ -211,171 +209,44 @@ program
           process.exit(1);
         }
 
-        const messages = store.messagesSince(tenantId, group.jid, since.value);
-        if (messages.length === 0) {
+        const summaryOptions: Partial<SummaryOptions> = {};
+        if (opts.style) summaryOptions.style = opts.style as SummaryOptions['style'];
+        if (opts.language) summaryOptions.language = opts.language as SummaryOptions['language'];
+        if (opts.maxWords && opts.maxWords > 0) summaryOptions.max_words = opts.maxWords;
+        const cadenceTz = 'tz' in group.cadence ? group.cadence.tz : undefined;
+        const tz = opts.tz ?? cadenceTz ?? systemTimeZone();
+
+        const result = await runDigest({
+          tenantId,
+          store,
+          config,
+          group,
+          sinceTs: since.value,
+          untilTs: nowTs,
+          trigger: 'manual',
+          tz,
+          vaultDir,
+          dryRun: opts.dryRun,
+          fresh: opts.fresh,
+          adapter: opts.adapter,
+          summaryOptions,
+        });
+        if (!result.ok) {
+          log.error({ error: result.error }, describeDigestError(result.error));
+          process.exit(1);
+        }
+        if (result.value.kind === 'empty') {
           console.log(`No messages in ${group.name ?? group.jid} since ${opts.since}.`);
           return;
         }
-
-        const adapterName = opts.adapter ?? group.summarizer;
-        const adapterCfg = config.summarizers[adapterName] ?? {};
-        const summarizer = createSummarizer(adapterName, {
-          bin: adapterCfg.bin,
-          model: adapterCfg.model,
-          timeoutMs: adapterCfg.timeout_seconds ? adapterCfg.timeout_seconds * 1000 : undefined,
-        });
-        if (!summarizer.ok) {
-          console.error(
-            `Unknown summarizer "${adapterName}". Available: ${summarizer.error.available.join(', ')}`,
-          );
-          process.exit(1);
-        }
-
-        const summaryOptions = { ...group.summary };
-        if (opts.style) summaryOptions.style = opts.style as typeof summaryOptions.style;
-        if (opts.language)
-          summaryOptions.language = opts.language as typeof summaryOptions.language;
-        if (opts.maxWords && opts.maxWords > 0) summaryOptions.max_words = opts.maxWords;
-
-        const cadenceTz = 'tz' in group.cadence ? group.cadence.tz : undefined;
-        const tz = opts.tz ?? cadenceTz ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
-
-        // Identity = the message set, so a drifting relative --since still
-        // maps to the same summary while the same messages fall inside it.
-        const first = messages[0];
-        const last = messages[messages.length - 1];
-        if (!first || !last) return;
-        const sid = summaryId({
-          tenantId,
-          groupJid: group.jid,
-          firstTs: first.ts,
-          firstId: first.id,
-          lastTs: last.ts,
-          lastId: last.id,
-        });
-        const groupName = group.name ?? group.jid;
-        const mode = opts.dryRun ? 'dry run' : 'deliver';
-
-        let summary = opts.fresh ? undefined : store.getSummary(tenantId, sid);
-        if (summary) {
-          log.info(
-            { tenant_id: tenantId, group: group.jid, summaryId: sid, mode },
-            'reusing stored summary for this window (pass --fresh to regenerate)',
-          );
-        } else {
-          log.info(
-            {
-              tenant_id: tenantId,
-              group: group.jid,
-              adapter: adapterName,
-              messages: messages.length,
-              since: opts.since,
-              mode,
-            },
-            'summarizing',
-          );
-          const result = await summarizer.value.summarize({
-            tenantId,
-            groupJid: group.jid,
-            groupName,
-            messages,
-            sinceTs: since.value,
-            untilTs: nowTs,
-            tz,
-            options: summaryOptions,
-          });
-          const createdTs = Math.floor(Date.now() / 1000);
-          if (!result.ok) {
-            store.insertRun({
-              tenantId,
-              id: randomUUID(),
-              groupJid: group.jid,
-              trigger: 'manual',
-              dryRun: Boolean(opts.dryRun),
-              sinceTs: since.value,
-              untilTs: nowTs,
-              messageCount: messages.length,
-              watermarkTs: last.ts,
-              watermarkId: last.id,
-              summaryId: null,
-              adapter: adapterName,
-              model: null,
-              status: 'error',
-              error: formatSummarizerError(result.error),
-              costUsd: null,
-              durationMs: null,
-              createdTs,
-            });
-            log.error({ error: result.error }, formatSummarizerError(result.error));
-            process.exit(1);
-          }
-          const s = result.value;
-          summary = {
-            tenantId,
-            id: sid,
-            groupJid: group.jid,
-            sinceTs: since.value,
-            untilTs: nowTs,
-            watermarkTs: last.ts,
-            watermarkId: last.id,
-            messageCount: messages.length,
-            adapter: s.adapter,
-            model: s.model,
-            text: s.text,
-            createdTs,
-          } satisfies SummaryRecord;
-          store.upsertSummary(summary);
-          store.insertRun({
-            tenantId,
-            id: randomUUID(),
-            groupJid: group.jid,
-            trigger: 'manual',
-            dryRun: Boolean(opts.dryRun),
-            sinceTs: since.value,
-            untilTs: nowTs,
-            messageCount: messages.length,
-            watermarkTs: last.ts,
-            watermarkId: last.id,
-            summaryId: sid,
-            adapter: s.adapter,
-            model: s.model,
-            status: 'ok',
-            error: null,
-            costUsd: s.costUsd,
-            durationMs: s.durationMs,
-            createdTs,
-          });
-          log.info(
-            {
-              adapter: s.adapter,
-              model: s.model,
-              messages: s.messageCount,
-              inputChars: s.inputChars,
-              words: s.text.split(/\s+/).length,
-              durationMs: s.durationMs,
-              costUsd: s.costUsd,
-              summaryId: sid,
-            },
-            'summary generated and recorded',
-          );
-        }
-
+        const { summary, reused, outcomes } = result.value;
+        if (reused)
+          console.log('(reusing the stored summary for these messages; --fresh regenerates)');
         console.log(`\n${summary.text}\n`);
-
         if (opts.dryRun) {
           console.log('(dry run — nothing delivered; the summary is stored and will be reused)');
           return;
         }
-
-        const outcomes = deliverSummary({
-          store,
-          summary,
-          deliver: group.deliver,
-          vaultDir,
-          render: { groupName, tz },
-          nowTs: Math.floor(Date.now() / 1000),
-          force: Boolean(opts.fresh),
-        });
         for (const o of outcomes) console.log(formatOutcome(o));
         if (outcomes.some((o) => o.outcome === 'error')) process.exit(1);
       } finally {
@@ -383,6 +254,57 @@ program
       }
     },
   );
+
+program
+  .command('schedule')
+  .description('show each group’s cadence, last run, and whether a digest is due now')
+  .action(() => {
+    const config = loadConfigOrExit();
+    const store = new Store(dbPath);
+    const scheduler = startScheduler({
+      tenantId,
+      config,
+      store,
+      vaultDir: resolve(process.env.VAULT_DIR ?? config.vault.dir),
+      tickMs: 3_600_000,
+    });
+    try {
+      for (const { group, state, decision } of scheduler.describe()) {
+        const cadence = describeCadence(group.cadence);
+        const last = state.runs[0];
+        const lastStr = last ? `${fmtTs(last.createdTs)} ${last.trigger}/${last.status}` : 'never';
+        const wm = state.watermark ? fmtTs(state.watermark.watermarkTs) : '—';
+        const due = decision.due ? `DUE (${decision.reason})` : `not due: ${decision.reason}`;
+        console.log(`${group.name ?? group.jid}`);
+        console.log(`  cadence:   ${cadence}`);
+        console.log(`  last run:  ${lastStr}`);
+        console.log(`  watermark: ${wm}`);
+        if (group.cadence.type === 'threshold')
+          console.log(`  pending:   ${state.pendingMessages} messages`);
+        console.log(`  status:    ${due}`);
+      }
+    } finally {
+      scheduler.stop();
+      store.close();
+    }
+  });
+
+function describeCadence(c: ResolvedGroupConfig['cadence']): string {
+  switch (c.type) {
+    case 'daily':
+      return `daily at ${c.at}${c.tz ? ` ${c.tz}` : ''}`;
+    case 'weekly':
+      return `weekly on ${c.day} at ${c.at}${c.tz ? ` ${c.tz}` : ''}`;
+    case 'threshold':
+      return `every ${c.messages} messages or ${c.max_hours}h`;
+    case 'manual':
+      return 'manual only';
+  }
+}
+
+function fmtTs(ts: number): string {
+  return new Date(ts * 1000).toISOString().slice(0, 16).replace('T', ' ');
+}
 
 program.parseAsync().catch((e: unknown) => {
   log.error({ err: e }, 'fatal error');

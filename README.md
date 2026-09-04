@@ -10,10 +10,10 @@ Self-hosted, all data stays on disk. Built tenant-keyed from the start: today
 it runs with a single tenant (`owner`), so it can grow into a bring-your-own-
 account service later without a rewrite (see `CLAUDE.md` and `docs/adr/`).
 
-> **Project status: phase 3 of 7 (deliver).** The agent pairs, ingests
-> allow-listed groups into SQLite, summarizes any stored window on demand, and
-> delivers the result to your WhatsApp self-chat and a Markdown vault. No
-> scheduling yet, and no
+> **Project status: phase 4 of 7 (scheduler).** The agent pairs, ingests
+> allow-listed groups into SQLite, summarizes on a daily, weekly, or
+> message-count cadence (or on demand via `/digest` in your own chat), and
+> delivers to your WhatsApp self-chat and a Markdown vault. No
 > outbound messages yet. See [Roadmap](#roadmap).
 
 ## Why
@@ -43,7 +43,7 @@ One Node/TypeScript process, split into modules with typed boundaries:
 | `src/cli/`       | `digest run`, `digest groups`, `digest summarize`                      | ✅ done |
 | `src/summarizer/`| Adapter interface; `fake` and `cli-claude` shipped, `cli-gemini`, `cli-codex`, `api-*` later | ✅ done |
 | `src/delivery/`  | Idempotent fan-out: self-DM and Markdown vault shipped; group post in phase 5 | ✅ done |
-| `src/scheduler/` | Daily / weekly / threshold triggers with restart-safe watermarks       | phase 4 |
+| `src/scheduler/` | Daily / weekly / threshold triggers, `/digest` commands, restart-safe watermarks | ✅ done |
 
 Cross-module imports go through each module's `index.ts` only. Errors are
 `Result`-style, not thrown strings. Logging is pino, one logger per module;
@@ -115,6 +115,7 @@ allow-listed groups are ever stored; everything else is dropped at the socket.
 
 | `pnpm digest summarize <group> --since 2d` | Summarize one group's stored messages and deliver to its channels |
 | `pnpm digest summarize <group> --since 2d --dry-run` | Same, but only print; nothing is delivered |
+| `pnpm digest schedule` | Show each group's cadence, last run, watermark, and whether it is due now |
 
 `<group>` is a JID, the `name` from `config.yaml`, or the group subject as
 WhatsApp shows it. `--since` takes `30m`, `12h`, `2d`, `1w`, or an ISO date.
@@ -139,6 +140,39 @@ Because the self-DM goes through the listener's outbox, `digest summarize` does
 not need its own WhatsApp session and never conflicts with a running `digest
 run`. If the listener is not running, the message waits in the queue until it
 is. Sends are retried up to five times and then marked failed.
+
+### Scheduling
+
+`digest run` evaluates every configured group once a minute:
+
+| Cadence     | Fires when                                                                 |
+| ----------- | -------------------------------------------------------------------------- |
+| `daily`     | The `at` time in `tz` has passed and no scheduled run exists for that occurrence |
+| `weekly`    | Same, for the given `day`                                                  |
+| `threshold` | At least `messages` new messages since the watermark, or any new messages and `max_hours` elapsed |
+| `manual`    | Never; only `digest summarize` or `/digest`                                |
+
+The decision is made from the database, not from memory: each run records the
+last message it covered as a watermark, and the next window starts right after
+it. A restart cannot double-summarize, and a process that was down at 08:00
+catches up when it comes back. A group first seen after today's slot waits for
+tomorrow's. If the summarizer fails, the slot is retried after 30 minutes, up
+to three times. Empty windows are recorded too, so they do not re-fire.
+
+### Commands in your own chat
+
+Send these to yourself (the "You" chat in WhatsApp) while `digest run` is up:
+
+```
+/digest                 every group since its last digest
+/digest 3d              every group over the last 3 days
+/digest Family          one group since its last digest
+/digest "Zouk team" 12h one group, explicit window
+/help                   list commands and groups
+```
+
+Replies always come back as a self-DM, even for groups with `self_dm: false`.
+Only live messages you send are treated as commands; history sync is ignored.
 
 #### Summarizer adapters
 
@@ -272,7 +306,7 @@ better-sqlite3, zod 4, pino, commander, vitest, biome.
 1. ✅ **Listen + store** — pair, ingest allow-listed groups, `digest groups`
 2. ✅ **Summarize on demand** — `fake` and `cli-claude` adapters, `--dry-run`
 3. ✅ **Deliver** to self-DM and Markdown vault with idempotent run records
-4. **Scheduler** — daily / weekly / threshold cadences, restart-safe watermarks
+4. ✅ **Scheduler** — daily / weekly / threshold cadences, `/digest`, restart-safe watermarks
 5. **Group posting** (opt-in) behind the send queue and rate limits
 6. **Docker profile** for a VPS, with CLI-auth mounting or API fallback
 7. Nice-to-have: action items, `/ask <group> <question>`, local dashboard

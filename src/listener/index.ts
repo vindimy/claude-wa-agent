@@ -8,6 +8,7 @@ export {
 export {
   type ListenerDeps,
   type ListenerHandle,
+  type OwnerCommand,
   type SessionState,
   startListener,
 } from './listener.js';

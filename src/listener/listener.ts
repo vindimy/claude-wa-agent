@@ -11,16 +11,23 @@ import { allowedJids, type Config } from '../config/index.js';
 import type { Transport } from '../delivery/index.js';
 import { createLogger, err, ok, tenantAuthDir } from '../shared/index.js';
 import type { Store } from '../store/index.js';
-import { extractAction } from './extract.js';
+import { extractAction, extractContent, toUnixSeconds } from './extract.js';
 
 const BACKOFF_BASE_MS = 1_000;
 const BACKOFF_CAP_MS = 60_000;
+
+export interface OwnerCommand {
+  text: string;
+  ts: number;
+}
 
 export interface ListenerDeps {
   tenantId: string;
   config: Config;
   store: Store;
   dataDir: string;
+  /** Called for live `/…` messages the owner sends to their own chat. */
+  onCommand?: (cmd: OwnerCommand) => void;
 }
 
 /**
@@ -36,7 +43,7 @@ export interface ListenerHandle extends Transport {
 }
 
 export async function startListener(deps: ListenerDeps): Promise<ListenerHandle> {
-  const { tenantId, config, store, dataDir } = deps;
+  const { tenantId, config, store, dataDir, onCommand } = deps;
   const log = createLogger('listener', { tenant_id: tenantId });
   const allowed = allowedJids(config);
   const authDir = tenantAuthDir(dataDir, tenantId);
@@ -111,10 +118,33 @@ export async function startListener(deps: ListenerDeps): Promise<ListenerHandle>
       }
     });
 
-    sock.ev.on('messages.upsert', ({ messages }) => {
+    const selfJids = (): Set<string> => {
+      const ids = [sock.user?.id, sock.user?.lid].filter((x): x is string => Boolean(x));
+      return new Set(ids.map((id) => jidNormalizedUser(id)));
+    };
+
+    sock.ev.on('messages.upsert', ({ messages, type }) => {
       for (const msg of messages) {
         const jid = msg.key?.remoteJid;
-        if (!jid || !isJidGroup(jid) || !allowed.has(jid)) continue;
+        if (!jid) continue;
+
+        // Owner commands: live (not history-sync) messages from me, to me.
+        if (
+          onCommand &&
+          type === 'notify' &&
+          msg.key?.fromMe &&
+          !isJidGroup(jid) &&
+          selfJids().has(jidNormalizedUser(jid))
+        ) {
+          const text = extractContent(msg.message)?.body?.trim();
+          if (text?.startsWith('/')) {
+            log.info({ command: text.split(/\s+/)[0] }, 'owner command received');
+            onCommand({ text, ts: toUnixSeconds(msg.messageTimestamp) });
+          }
+          continue;
+        }
+
+        if (!isJidGroup(jid) || !allowed.has(jid)) continue;
 
         const action = extractAction(msg);
         switch (action.action) {
