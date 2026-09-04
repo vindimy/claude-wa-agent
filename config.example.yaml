@@ -14,11 +14,16 @@ defaults:
     max_words: 300
 
 # Per-adapter options, keyed by adapter name. All keys optional.
+# Override the adapter for every group at runtime with SUMMARIZER=api-anthropic
+# (used by the Docker profile when CLI auth is not available).
 summarizers:
   cli-claude:
     model: sonnet         # alias or full model id; omit for the CLI's default
     timeout_seconds: 180
     # bin: /usr/local/bin/claude
+  api-anthropic:          # needs ANTHROPIC_API_KEY in the environment
+    model: claude-opus-5  # any current model id; claude-sonnet-5 is cheaper
+    timeout_seconds: 180
 
 # Markdown notes vault. One note per summary: <dir>/<group-slug>/<date>-<id>.md
 # Override at runtime with VAULT_DIR.

@@ -41,7 +41,7 @@ One Node/TypeScript process, split into modules with typed boundaries:
 | `src/store/`     | SQLite via better-sqlite3: groups, messages (edits, soft deletes)      | ✅ done |
 | `src/config/`    | zod-validated `config.yaml` + env, per-group overrides over defaults   | ✅ done |
 | `src/cli/`       | `digest run`, `digest groups`, `digest summarize`                      | ✅ done |
-| `src/summarizer/`| Adapter interface; `fake` and `cli-claude` shipped, `cli-gemini`, `cli-codex`, `api-*` later | ✅ done |
+| `src/summarizer/`| Adapter interface; `fake`, `cli-claude`, and `api-anthropic` shipped, `cli-gemini`, `cli-codex` later | ✅ done |
 | `src/delivery/`  | Idempotent fan-out: self-DM, Markdown vault, and opt-in group post through one outbox | ✅ done |
 | `src/scheduler/` | Daily / weekly / threshold triggers, `/digest` commands, restart-safe watermarks | ✅ done |
 
@@ -198,13 +198,15 @@ treated as commands; history sync is ignored.
 
 | Adapter      | What it does                                                                    |
 | ------------ | ------------------------------------------------------------------------------- |
-| `cli-claude` | Spawns `claude -p` with the transcript on stdin: no tools, no session files, no settings pickup. Uses your existing CLI login. |
+| `cli-claude` | Spawns `claude -p` with the transcript on stdin: no tools, no session files, no settings pickup. Uses your existing CLI login. Owner-only. |
+| `api-anthropic` | Calls the Anthropic Messages API with `ANTHROPIC_API_KEY`. Default model `claude-opus-5`; set `summarizers.api-anthropic.model` to `claude-sonnet-5` for a cheaper run. Server-side refusal fallbacks are on. |
 | `fake`       | Deterministic stats-only output with no external call. For tests and plumbing. |
 
 The prompt asks for plain WhatsApp-friendly text, keeps the transcript's
 Russian/English mix unless `summary.language` pins one, and hard-caps length at
 `summary.max_words`. Per-adapter `model`, `timeout_seconds`, and `bin` live
-under `summarizers:` in `config.yaml`.
+under `summarizers:` in `config.yaml`. `SUMMARIZER=<adapter>` in the
+environment forces one adapter for every group without editing the file.
 
 ### Environment
 
@@ -214,6 +216,10 @@ under `summarizers:` in `config.yaml`.
 | `DATA_DIR`    | `./data`        | SQLite DB (`digest.db`) and WhatsApp auth    |
 | `VAULT_DIR`   | `config.vault.dir` (`./vault`) | Where Markdown notes are written |
 | `LOG_LEVEL`   | `info`          | pino level: `trace` … `fatal`                |
+| `SUMMARIZER`  | from config     | Force one adapter for every group (`api-anthropic`, `cli-claude`, `fake`) |
+| `CLAUDE_CODE_OAUTH_TOKEN` | unset | Headless login for `cli-claude`, from `claude setup-token`. Owner-only. |
+| `ANTHROPIC_API_KEY` | unset     | Key for `api-anthropic`                       |
+| `TZ`          | system          | Fallback time zone for cadences without `tz` (set it in Docker) |
 
 A `.env` in the working directory is loaded automatically if present.
 
@@ -295,6 +301,23 @@ the host and Docker profiles against the same directory.
 This uses an unofficial client on a personal account. Ban risk is real; the
 agent is built to behave like a human who is simply present in the group.
 
+## Deployment
+
+Two profiles run the same code:
+
+- **host** (Mac mini, primary): `pnpm build` then run `node dist/cli/index.js run`
+  under pm2 or launchd. The `claude` CLI is already logged in, so `cli-claude`
+  works as-is.
+- **docker** (VPS, also the future service profile): `docker compose up -d`
+  with `./data`, `./vault`, and `config.yaml` mounted. The image installs the
+  `claude` CLI; authenticate it with `CLAUDE_CODE_OAUTH_TOKEN` from
+  `claude setup-token`, or set `SUMMARIZER=api-anthropic` plus
+  `ANTHROPIC_API_KEY` to skip the CLI entirely.
+
+Never run both profiles against the same `data/` directory. Step-by-step
+instructions, pairing inside the container, and the failure modes we know
+about are in [`docs/deploy.md`](docs/deploy.md).
+
 ## Development
 
 ```bash
@@ -331,7 +354,7 @@ better-sqlite3, zod 4, pino, commander, vitest, biome.
 3. ✅ **Deliver** to self-DM and Markdown vault with idempotent run records
 4. ✅ **Scheduler** — daily / weekly / threshold cadences, `/digest`, restart-safe watermarks
 5. ✅ **Group posting** (opt-in) behind the send queue and rate limits
-6. **Docker profile** for a VPS, with CLI-auth mounting or API fallback
+6. ✅ **Docker profile** for a VPS, with headless CLI auth or the `api-anthropic` fallback
 7. Nice-to-have: action items, `/ask <group> <question>`, local dashboard
 
 Design decisions are recorded in `docs/adr/`.

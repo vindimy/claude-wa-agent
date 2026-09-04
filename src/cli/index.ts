@@ -5,6 +5,7 @@ import {
   type Config,
   type ConfigError,
   loadConfig,
+  overrideSummarizer,
   type ResolvedGroupConfig,
   resolveGroupConfig,
   type SummaryOptions,
@@ -42,7 +43,14 @@ function loadConfigOrExit() {
     log.error({ error: result.error }, formatConfigError(result.error));
     process.exit(1);
   }
-  return result.value;
+  const forced = process.env.SUMMARIZER?.trim();
+  if (!forced) return result.value;
+  if (!ADAPTER_NAMES.includes(forced)) {
+    log.error({ SUMMARIZER: forced, available: ADAPTER_NAMES }, 'unknown summarizer in SUMMARIZER');
+    process.exit(1);
+  }
+  log.info({ summarizer: forced }, 'SUMMARIZER env overrides the adapter for every group');
+  return overrideSummarizer(result.value, forced);
 }
 
 function formatConfigError(e: ConfigError): string {

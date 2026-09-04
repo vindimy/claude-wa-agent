@@ -9,6 +9,22 @@ export type ConfigError =
   | { tag: 'parse'; path: string; message: string }
   | { tag: 'validate'; path: string; message: string };
 
+/**
+ * Force one adapter for every group (the `SUMMARIZER` env var). This is the
+ * documented escape hatch for the Docker profile: flip the owner from
+ * `cli-claude` to `api-anthropic` without editing config.yaml.
+ */
+export function overrideSummarizer(config: Config, name: string): Config {
+  return {
+    ...config,
+    defaults: { ...config.defaults, summarizer: name },
+    groups: config.groups.map((g) => {
+      const { summarizer: _dropped, ...rest } = g;
+      return rest;
+    }),
+  };
+}
+
 export function loadConfig(path: string): Result<Config, ConfigError> {
   let text: string;
   try {

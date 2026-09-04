@@ -1,4 +1,4 @@
-export { type ConfigError, loadConfig } from './load.js';
+export { type ConfigError, loadConfig, overrideSummarizer } from './load.js';
 export {
   allowedJids,
   type Cadence,

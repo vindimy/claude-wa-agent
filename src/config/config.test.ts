@@ -2,7 +2,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { loadConfig } from './load.js';
+import { loadConfig, overrideSummarizer } from './load.js';
 import { allowedJids, configSchema, resolveGroupConfig } from './schema.js';
 
 function writeTemp(content: string): string {
@@ -134,5 +134,20 @@ describe('summarizers section', () => {
     expect(() =>
       configSchema.parse({ summarizers: { 'cli-claude': { timeout_seconds: -1 } } }),
     ).toThrow();
+  });
+});
+
+describe('overrideSummarizer', () => {
+  it('forces one adapter on defaults and every group', () => {
+    const config = configSchema.parse({
+      defaults: { summarizer: 'cli-claude' },
+      groups: [{ jid: '1@g.us', summarizer: 'fake' }, { jid: '2@g.us' }],
+    });
+    const forced = overrideSummarizer(config, 'api-anthropic');
+    expect(forced.defaults.summarizer).toBe('api-anthropic');
+    expect(resolveGroupConfig(forced, '1@g.us')?.summarizer).toBe('api-anthropic');
+    expect(resolveGroupConfig(forced, '2@g.us')?.summarizer).toBe('api-anthropic');
+    // the original is untouched
+    expect(resolveGroupConfig(config, '1@g.us')?.summarizer).toBe('fake');
   });
 });

@@ -29,8 +29,9 @@ Scale comes from the tenant key, not from redesigns.
    via env + config.
 4. **Adapter choice is config, not code.** The owner tenant uses locally
    authenticated CLIs first (`claude`, `gemini`, `codex`) with API-key adapters
-   as a fallback. Every other tenant uses API-key (`api-*`) adapters only; the
-   CLI adapters are owner-only and never run for another tenant.
+   as a fallback (`SUMMARIZER=api-anthropic` forces it for every group). Every
+   other tenant uses API-key (`api-*`) adapters only; the CLI adapters are
+   owner-only and never run for another tenant.
 5. **All data stays under our control.** SQLite on disk and notes in a local
    vault directory for the owner; the service profile keeps the same store on
    its own volume (object storage for auth/state later). No third-party message
@@ -117,12 +118,13 @@ sends `/digest` or `/digest 3d` from their own number in their self-chat.
 - **host** (Mac mini, primary): run under pm2 or launchd. CLIs are already
   authenticated in `~/.claude`, `~/.gemini`, `~/.codex`. WhatsApp auth state
   in `./data/tenants/<tenant_id>/auth/` (owner: `./data/tenants/owner/auth/`).
-- **docker** (VPS): `docker compose up -d`. Mount `./data` as a volume. This is
-  also the service profile: stateless app container(s) plus a persistent
-  volume. For the owner's CLI adapters, bind-mount the host's CLI auth dirs
-  read-only and install the CLIs in the image; if that proves brittle, flip
-  `summarizer` to an `api-*` adapter via env. Document whichever path actually
-  works in `docs/deploy.md`.
+- **docker** (VPS): `docker compose up -d`. Mount `./data`, `./vault`, and
+  `config.yaml`. This is also the service profile: stateless app container(s)
+  plus a persistent volume. The image installs the `claude` CLI; the owner
+  authenticates it headlessly with `CLAUDE_CODE_OAUTH_TOKEN` (from
+  `claude setup-token`) rather than by mounting `~/.claude`, which on macOS
+  holds no credentials (they live in the Keychain). Fallback: `SUMMARIZER=
+  api-anthropic` plus `ANTHROPIC_API_KEY` via env. Details in `docs/deploy.md`.
 
 Only one instance may be linked at a time per tenant auth directory. Never run
 host and docker profiles simultaneously against the same
@@ -183,8 +185,8 @@ host and docker profiles simultaneously against the same
 5. **Group posting (opt-in)** with send queue and rate limits. Scheduled runs
    post; on-demand runs (`digest summarize`, `/digest`) stay private unless
    `--post` is given. *(shipped)*
-6. **Docker profile** on the VPS (doubles as the service profile); document
-   CLI-auth mounting or API fallback.
+6. **Docker profile** on the VPS (doubles as the service profile); headless
+   CLI auth via token or the `api-anthropic` fallback via env. *(shipped)*
 7. Nice-to-have: action-item extraction, `/ask <group> <question>` over stored
    history, simple local web dashboard.
 

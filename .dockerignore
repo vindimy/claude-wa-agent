@@ -1,0 +1,11 @@
+node_modules
+dist
+data
+vault
+.env
+config.yaml
+*.log
+.git
+docs
+README.md
+CLAUDE.md
