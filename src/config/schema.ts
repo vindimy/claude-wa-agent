@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { PERSONALITY_PRESETS } from './personalities.js';
 
 const timeOfDay = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'expected HH:MM');
 
@@ -31,6 +32,10 @@ const summaryShape = {
   language: z.enum(['auto', 'ru', 'en']),
   style: z.enum(['topics', 'narrative', 'action-items']),
   max_words: z.number().int().positive(),
+  /** A preset name or a key under `personalities:`; checked in configSchema. */
+  personality: z.string().trim().min(1),
+  /** Plain-English guidance for the model. Group text is appended to the default text. */
+  instructions: z.string().trim(),
 };
 
 export const deliverSchema = z.object({
@@ -44,6 +49,8 @@ export const summarySchema = z.object({
   language: summaryShape.language.default('en'),
   style: summaryShape.style.default('topics'),
   max_words: summaryShape.max_words.default(300),
+  personality: summaryShape.personality.default('neutral'),
+  instructions: summaryShape.instructions.default(''),
 });
 
 const deliverOverrideSchema = z.object(deliverShape).partial();
@@ -84,21 +91,45 @@ export const summarizerOptionsSchema = z.object({
 /** Message retention in days. Summaries and run records are kept regardless. */
 export const retentionDays = z.union([z.literal(30), z.literal(60), z.literal(90), z.literal(180)]);
 
-export const configSchema = z.object({
-  defaults: defaultsSchema.prefault({}),
-  retention: z.object({ days: retentionDays.default(30) }).prefault({}),
-  summarizers: z.record(z.string(), summarizerOptionsSchema).default({}),
-  vault: z.object({ dir: z.string().default('./vault') }).prefault({}),
-  limits: z
-    .object({
-      max_sends_per_day: z.number().int().positive().default(30),
-      /** Minimum spacing between two posts into the same group. */
-      min_group_post_gap_minutes: z.number().nonnegative().default(60),
-    })
-    .prefault({}),
-  ingest: z.object({ media: z.boolean().default(false) }).prefault({}),
-  groups: z.array(groupConfigSchema).default([]),
-});
+/** Custom voices, keyed by name. A name that matches a preset overrides it. */
+const personalitiesSchema = z.record(z.string().trim().min(1), z.string().trim().min(1));
+
+export const configSchema = z
+  .object({
+    defaults: defaultsSchema.prefault({}),
+    personalities: personalitiesSchema.default({}),
+    retention: z.object({ days: retentionDays.default(30) }).prefault({}),
+    summarizers: z.record(z.string(), summarizerOptionsSchema).default({}),
+    vault: z.object({ dir: z.string().default('./vault') }).prefault({}),
+    limits: z
+      .object({
+        max_sends_per_day: z.number().int().positive().default(30),
+        /** Minimum spacing between two posts into the same group. */
+        min_group_post_gap_minutes: z.number().nonnegative().default(60),
+      })
+      .prefault({}),
+    ingest: z.object({ media: z.boolean().default(false) }).prefault({}),
+    groups: z.array(groupConfigSchema).default([]),
+  })
+  // Every personality named anywhere must exist, so a typo fails at load
+  // time rather than silently producing a neutral digest.
+  .superRefine((config, ctx) => {
+    const known = (name: string) =>
+      Object.hasOwn(config.personalities, name) || Object.hasOwn(PERSONALITY_PRESETS, name);
+    const complain = (name: string, path: (string | number)[]) =>
+      ctx.addIssue({
+        code: 'custom',
+        path,
+        message: `unknown personality "${name}"; add it under personalities: or use one of ${Object.keys(PERSONALITY_PRESETS).join(', ')}`,
+      });
+    if (!known(config.defaults.summary.personality)) {
+      complain(config.defaults.summary.personality, ['defaults', 'summary', 'personality']);
+    }
+    config.groups.forEach((g, i) => {
+      const p = g.summary?.personality;
+      if (p !== undefined && !known(p)) complain(p, ['groups', i, 'summary', 'personality']);
+    });
+  });
 
 export type Cadence = z.infer<typeof cadenceSchema>;
 export type Deliver = z.infer<typeof deliverSchema>;
@@ -126,8 +157,31 @@ export function resolveGroupConfig(config: Config, jid: string): ResolvedGroupCo
     summarizer: group.summarizer ?? config.defaults.summarizer,
     cadence: group.cadence ?? config.defaults.cadence,
     deliver: { ...config.defaults.deliver, ...group.deliver },
-    summary: { ...config.defaults.summary, ...group.summary },
+    summary: mergeSummary(config.defaults.summary, group.summary),
   };
+}
+
+/**
+ * Group keys shadow defaults, except `instructions`, which layer: the default
+ * text applies to every group and the group's own text is appended, so a
+ * global rule such as "always flag deadlines" survives per-group additions.
+ */
+export function mergeSummary(
+  base: SummaryOptions,
+  override: Partial<SummaryOptions> | undefined,
+): SummaryOptions {
+  return {
+    ...base,
+    ...override,
+    instructions: joinInstructions(base.instructions, override?.instructions),
+  };
+}
+
+export function joinInstructions(...parts: (string | undefined)[]): string {
+  return parts
+    .map((p) => p?.trim() ?? '')
+    .filter(Boolean)
+    .join('\n');
 }
 
 export function allowedJids(config: Config): Set<string> {

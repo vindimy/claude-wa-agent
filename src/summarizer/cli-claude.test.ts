@@ -97,7 +97,13 @@ describe('cli-claude adapter (unit)', () => {
       sinceTs: 0,
       untilTs: 1,
       tz: 'UTC',
-      options: { language: 'auto', style: 'topics', max_words: 100 },
+      options: {
+        language: 'auto',
+        style: 'topics',
+        max_words: 100,
+        personality: 'neutral',
+        instructions: '',
+      },
     });
     expect(!r.ok && r.error.tag).toBe('empty');
   });
@@ -118,7 +124,13 @@ function fixtureInput(overrides: Partial<SummaryInput> = {}): SummaryInput {
     sinceTs: 1_756_800_000,
     untilTs: 1_757_000_000,
     tz: 'America/Los_Angeles',
-    options: { language: 'auto', style: 'topics', max_words: 200 },
+    options: {
+      language: 'auto',
+      style: 'topics',
+      max_words: 200,
+      personality: 'neutral',
+      instructions: '',
+    },
     ...overrides,
   };
 }

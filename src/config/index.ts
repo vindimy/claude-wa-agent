@@ -1,4 +1,5 @@
 export { type ConfigError, loadConfig, overrideSummarizer } from './load.js';
+export { PERSONALITY_PRESETS, personalityNames, resolvePersonality } from './personalities.js';
 export {
   allowedJids,
   type Cadence,
@@ -6,6 +7,8 @@ export {
   configSchema,
   type Deliver,
   type GroupConfig,
+  joinInstructions,
+  mergeSummary,
   type ResolvedGroupConfig,
   resolveGroupConfig,
   type SummarizerOptions,

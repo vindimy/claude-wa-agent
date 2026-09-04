@@ -96,7 +96,7 @@ const LANGUAGE_INSTRUCTIONS = {
 
 export function buildSystemPrompt(input: SummaryInput): string {
   const { options } = input;
-  return [
+  const lines = [
     'You summarize a WhatsApp group chat for one of its members, who reads your summary instead of the chat. You receive a transcript and reply with the summary only — no preamble, no closing remarks.',
     '',
     'Rules:',
@@ -107,7 +107,24 @@ export function buildSystemPrompt(input: SummaryInput): string {
     `- Length: at most ${options.max_words} words.`,
     `- ${STYLE_INSTRUCTIONS[options.style]}`,
     `- ${LANGUAGE_INSTRUCTIONS[options.language]}`,
-  ].join('\n');
+  ];
+  const voice = input.personality?.trim();
+  if (voice) {
+    lines.push(
+      '',
+      `Voice: ${voice}`,
+      'The voice shapes tone and phrasing only; it never changes, omits, softens, or exaggerates a fact.',
+    );
+  }
+  const instructions = options.instructions?.trim();
+  if (instructions) {
+    lines.push(
+      '',
+      'Additional instructions from the reader (they take precedence over the style and voice above, but never over accuracy):',
+      instructions,
+    );
+  }
+  return lines.join('\n');
 }
 
 export function buildUserPrompt(input: SummaryInput, transcript: string): string {

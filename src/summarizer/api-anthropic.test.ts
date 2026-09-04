@@ -17,7 +17,13 @@ const input: SummaryInput = {
   sinceTs: 0,
   untilTs: 2_000_000_000,
   tz: 'UTC',
-  options: { language: 'auto', style: 'topics', max_words: 200 },
+  options: {
+    language: 'auto',
+    style: 'topics',
+    max_words: 200,
+    personality: 'neutral',
+    instructions: '',
+  },
 };
 
 function response(over: Partial<Anthropic.Beta.Messages.BetaMessage> = {}) {

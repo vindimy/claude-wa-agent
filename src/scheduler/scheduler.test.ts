@@ -239,7 +239,13 @@ describe('runDigest', () => {
       summarizer: 'fake',
       cadence: { type: 'manual' as const },
       deliver: { self_dm: false, group: true, vault: false },
-      summary: { language: 'auto' as const, style: 'topics' as const, max_words: 100 },
+      summary: {
+        language: 'auto' as const,
+        style: 'topics' as const,
+        max_words: 100,
+        personality: 'neutral',
+        instructions: '',
+      },
     };
     const base = {
       tenantId: 'owner',
@@ -276,7 +282,13 @@ describe('runDigest', () => {
       summarizer: 'cli-claude',
       cadence: { type: 'manual' as const },
       deliver: { self_dm: true, group: false, vault: true },
-      summary: { language: 'auto' as const, style: 'topics' as const, max_words: 100 },
+      summary: {
+        language: 'auto' as const,
+        style: 'topics' as const,
+        max_words: 100,
+        personality: 'neutral',
+        instructions: '',
+      },
     };
     const r = await runDigest({
       tenantId: 'owner',

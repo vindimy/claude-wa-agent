@@ -190,6 +190,8 @@ program
   .option('--style <style>', 'topics | narrative | action-items')
   .option('--language <lang>', 'auto | ru | en')
   .option('--max-words <n>', 'length cap', (v: string) => Number.parseInt(v, 10))
+  .option('--personality <name>', 'voice: a preset or a name under personalities:')
+  .option('--instructions <text>', 'extra plain-English guidance, appended to the configured text')
   .option('--tz <zone>', 'IANA time zone for transcript timestamps')
   .action(
     async (
@@ -203,6 +205,8 @@ program
         style?: string;
         language?: string;
         maxWords?: number;
+        personality?: string;
+        instructions?: string;
         tz?: string;
       },
     ) => {
@@ -230,6 +234,8 @@ program
         if (opts.style) summaryOptions.style = opts.style as SummaryOptions['style'];
         if (opts.language) summaryOptions.language = opts.language as SummaryOptions['language'];
         if (opts.maxWords && opts.maxWords > 0) summaryOptions.max_words = opts.maxWords;
+        if (opts.personality) summaryOptions.personality = opts.personality;
+        if (opts.instructions) summaryOptions.instructions = opts.instructions;
         const cadenceTz = 'tz' in group.cadence ? group.cadence.tz : undefined;
         const tz = opts.tz ?? cadenceTz ?? systemTimeZone();
 

@@ -143,7 +143,8 @@ allow-listed groups are ever stored; everything else is dropped at the socket.
 
 `<group>` is a JID, the `name` from `config.yaml`, or the group subject as
 WhatsApp shows it. `--since` takes `30m`, `12h`, `2d`, `1w`, or an ISO date.
-Flags `--adapter`, `--style`, `--language`, `--max-words`, and `--tz` override
+Flags `--adapter`, `--style`, `--language`, `--max-words`, `--personality`,
+`--instructions`, and `--tz` override
 the group's config for one run.
 
 A summary's identity is its window: the same group, start, and last message
@@ -233,6 +234,25 @@ Russian/English mix), and hard-caps length at `summary.max_words`. Per-adapter `
 under `summarizers:` in `config.yaml`. `SUMMARIZER=<adapter>` in the
 environment forces one adapter for every group without editing the file.
 
+#### Voice and instructions
+
+Two more `summary` keys shape the text without touching the facts:
+
+- `personality` picks a voice. Presets: `neutral` (default), `dry`, `friendly`,
+  `russian-sarcasm` (deadpan Moscow-kitchen irony, written in English),
+  `executive`, `newsroom`, `butler`, `hype`. Define your own in plain English
+  under a top-level `personalities:` map and reference it by name; a custom
+  entry with a preset's name replaces that preset. An unknown name is a config
+  error at startup, listed with the available names.
+- `instructions` is free-form plain-English guidance ("always flag deadlines",
+  "Baba is grandma"). The `defaults` text applies to every group and a group's
+  own text is appended to it, so global rules survive per-group additions.
+
+Both go into the system prompt after the fixed rules, with a guard that tone
+never changes, omits, or exaggerates a fact. `digest summarize --personality
+<name> --instructions "<text>" --dry-run --fresh` previews a voice on real
+messages (`--fresh` because a stored summary for the same window is reused).
+
 ### Environment
 
 | Variable      | Default         | Purpose                                      |
@@ -261,7 +281,15 @@ defaults:
   summarizer: cli-claude        # fake | cli-claude | api-anthropic | api-openai | api-google
   cadence: { type: daily, at: "08:00", tz: "America/Los_Angeles" }
   deliver: { self_dm: true, group: false, vault: true }
-  summary: { language: en, style: topics, max_words: 300 }   # language: auto keeps the chat's mix
+  summary:
+    language: en                # auto keeps the chat's mix
+    style: topics
+    max_words: 300
+    personality: neutral        # or dry | friendly | russian-sarcasm | executive | newsroom | butler | hype
+    instructions: "Always call out deadlines and money."
+
+personalities:                  # custom voices, plain English, referenced by name
+  grumpy-uncle: "A grumpy but loving uncle who gets every fact right anyway."
 
 limits:
   max_sends_per_day: 30
@@ -277,7 +305,7 @@ groups:
   - jid: "120363000000000002@g.us"
     name: "Family"
     cadence: { type: weekly, day: sun, at: "18:00" }
-    summary: { language: ru }
+    summary: { language: ru, personality: friendly, instructions: "Baba is grandma." }
 ```
 
 Cadence types: `daily`, `weekly`, `threshold` (N messages or M hours, whichever

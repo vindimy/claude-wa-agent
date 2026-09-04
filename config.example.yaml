@@ -12,6 +12,21 @@ defaults:
     language: en            # en (default) | ru | auto (keep the chat's own mix)
     style: topics           # topics | narrative | action-items
     max_words: 300
+    # Voice of the summary. Presets: neutral (default) | dry | friendly |
+    # russian-sarcasm | executive | newsroom | butler | hype, or any name
+    # defined under `personalities:` below. Tone only; facts never change.
+    personality: neutral
+    # Plain-English guidance for every group. A group's own `instructions`
+    # are appended to this text, not substituted for it.
+    instructions: >-
+      Always call out deadlines and money. Skip who-liked-what.
+
+# Custom voices in plain English, keyed by name. Use them as
+# `summary.personality: <name>`. A name that matches a preset replaces it.
+personalities:
+  grumpy-uncle: >-
+    A grumpy but loving uncle who has seen it all. Complains about how things
+    used to be simpler, then gets the facts exactly right anyway.
 
 # Per-adapter options, keyed by adapter name. All keys optional.
 # Override the adapter for every group at runtime with SUMMARIZER=api-anthropic
@@ -58,4 +73,7 @@ groups:
   - jid: "120363000000000002@g.us"
     name: "Family"
     cadence: { type: weekly, day: sun, at: "18:00" }
-    summary: { language: ru }
+    summary:
+      language: ru
+      personality: friendly
+      instructions: "Baba is grandma; the twins are Masha and Dasha."

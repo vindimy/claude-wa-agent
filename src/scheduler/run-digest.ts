@@ -1,5 +1,12 @@
 import { randomUUID } from 'node:crypto';
-import type { Config, ResolvedGroupConfig, SummaryOptions } from '../config/index.js';
+import {
+  type Config,
+  mergeSummary,
+  personalityNames,
+  type ResolvedGroupConfig,
+  resolvePersonality,
+  type SummaryOptions,
+} from '../config/index.js';
 import { type DeliveryOutcome, deliverSummary } from '../delivery/index.js';
 import { createLogger, err, ok, type Result } from '../shared/index.js';
 import { type RunTrigger, type Store, type SummaryRecord, summaryId } from '../store/index.js';
@@ -65,6 +72,7 @@ export type DigestResult =
 
 export type DigestError =
   | { tag: 'unknown-adapter'; name: string; available: readonly string[] }
+  | { tag: 'unknown-personality'; name: string; available: readonly string[] }
   | { tag: 'summarize'; error: SummarizerError };
 
 /**
@@ -111,9 +119,24 @@ export async function runDigest(req: DigestRequest): Promise<Result<DigestResult
     log.info({ group: group.jid, summaryId: sid, trigger }, 'reusing stored summary');
   } else {
     reused = false;
-    const options: SummaryOptions = { ...group.summary, ...req.summaryOptions };
+    const options: SummaryOptions = mergeSummary(group.summary, req.summaryOptions);
+    const personality = resolvePersonality(config, options.personality);
+    if (personality === undefined) {
+      return err({
+        tag: 'unknown-personality',
+        name: options.personality,
+        available: personalityNames(config),
+      });
+    }
     log.info(
-      { group: group.jid, adapter: adapterName, messages: messages.length, trigger, dryRun },
+      {
+        group: group.jid,
+        adapter: adapterName,
+        messages: messages.length,
+        trigger,
+        dryRun,
+        personality: options.personality,
+      },
       'summarizing',
     );
     const result = await summarizer.value.summarize({
@@ -125,6 +148,7 @@ export async function runDigest(req: DigestRequest): Promise<Result<DigestResult
       untilTs,
       tz,
       options,
+      personality,
     });
     const createdTs = Math.floor(now() / 1000);
     const runBase = {
@@ -242,6 +266,9 @@ export function describeSummarizerError(e: SummarizerError): string {
 export function describeDigestError(e: DigestError): string {
   if (e.tag === 'unknown-adapter') {
     return `unknown summarizer "${e.name}" (available: ${e.available.join(', ')})`;
+  }
+  if (e.tag === 'unknown-personality') {
+    return `unknown personality "${e.name}" (available: ${e.available.join(', ')})`;
   }
   return describeSummarizerError(e.error);
 }

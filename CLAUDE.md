@@ -95,9 +95,14 @@ defaults:
   cadence: { type: daily, at: "08:00", tz: "America/Los_Angeles" }
   deliver: { self_dm: true, group: false, vault: true }
   summary:
-    language: auto          # auto | ru | en
+    language: en            # en | ru | auto
     style: topics           # topics | narrative | action-items
     max_words: 300
+    personality: neutral    # preset or a key under personalities:; tone only
+    instructions: "Always call out deadlines."   # plain English; groups append to it
+
+personalities:              # custom voices in plain English, referenced by name
+  grumpy-uncle: "A grumpy but loving uncle who still gets every fact right."
 
 groups:
   - jid: "1203630XXXXXXXX@g.us"
@@ -107,8 +112,13 @@ groups:
   - jid: "1203630YYYYYYYY@g.us"
     name: "Family"
     cadence: { type: weekly, day: sun, at: "18:00" }
-    summary: { language: ru }
+    summary: { language: ru, personality: friendly, instructions: "Baba is grandma." }
 ```
+
+Personality presets: `neutral`, `dry`, `friendly`, `russian-sarcasm`,
+`executive`, `newsroom`, `butler`, `hype` (`src/config/personalities.ts`).
+Voice and instructions enter the system prompt after the fixed rules with a
+guard that tone never alters facts; unknown names fail config validation.
 
 Cadence types: `daily`, `weekly`, `threshold` (N messages or M hours, whichever
 first), `manual` (on-demand only). On-demand trigger for any group: the tenant

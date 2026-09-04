@@ -31,7 +31,13 @@ function input(messages: MessageRow[], overrides: Partial<SummaryInput> = {}): S
     sinceTs: 1_756_800_000,
     untilTs: 1_757_000_000,
     tz: TZ,
-    options: { language: 'auto', style: 'topics', max_words: 300 },
+    options: {
+      language: 'auto',
+      style: 'topics',
+      max_words: 300,
+      personality: 'neutral',
+      instructions: '',
+    },
     ...overrides,
   };
 }
@@ -99,7 +105,15 @@ describe('formatTranscript', () => {
 describe('buildPrompt', () => {
   it('encodes style, language and length in the system prompt', () => {
     const { system } = buildPrompt(
-      input([row()], { options: { language: 'ru', style: 'action-items', max_words: 120 } }),
+      input([row()], {
+        options: {
+          language: 'ru',
+          style: 'action-items',
+          max_words: 120,
+          personality: 'neutral',
+          instructions: '',
+        },
+      }),
     );
     expect(system).toContain('at most 120 words');
     expect(system).toContain('entire summary in Russian');
@@ -110,6 +124,37 @@ describe('buildPrompt', () => {
   it('describes the mixed-language rule for auto', () => {
     const { system } = buildPrompt(input([row()]));
     expect(system).toContain('mixes Russian and English');
+  });
+
+  it('omits the voice and instructions sections when both are empty', () => {
+    const { system } = buildPrompt(input([row()]));
+    expect(system).not.toContain('Voice:');
+    expect(system).not.toContain('Additional instructions');
+  });
+
+  it('adds a voice section with the resolved personality text', () => {
+    const { system } = buildPrompt(input([row()], { personality: 'Talk like a pirate.' }));
+    expect(system).toContain('Voice: Talk like a pirate.');
+    expect(system).toContain('never changes, omits, softens, or exaggerates a fact');
+  });
+
+  it('adds the reader instructions after the rules and the voice', () => {
+    const { system } = buildPrompt(
+      input([row()], {
+        personality: 'Deadpan.',
+        options: {
+          language: 'en',
+          style: 'topics',
+          max_words: 300,
+          personality: 'custom',
+          instructions: 'Flag deadlines.\nBaba means grandma.',
+        },
+      }),
+    );
+    expect(system).toContain('Additional instructions from the reader');
+    expect(system).toContain('Flag deadlines.\nBaba means grandma.');
+    expect(system.indexOf('Voice:')).toBeLessThan(system.indexOf('Additional instructions'));
+    expect(system.indexOf('Rules:')).toBeLessThan(system.indexOf('Voice:'));
   });
 
   it('puts the group, window and transcript in the user prompt', () => {

@@ -12,7 +12,13 @@ function input(overrides: Partial<SummaryInput> = {}): SummaryInput {
     sinceTs: 1_756_800_000,
     untilTs: 1_757_000_000,
     tz: 'UTC',
-    options: { language: 'auto', style: 'topics', max_words: 300 },
+    options: {
+      language: 'auto',
+      style: 'topics',
+      max_words: 300,
+      personality: 'neutral',
+      instructions: '',
+    },
     ...overrides,
   };
 }

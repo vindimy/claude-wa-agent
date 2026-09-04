@@ -14,6 +14,11 @@ export interface SummaryInput {
   /** IANA time zone used to render timestamps in the transcript. */
   tz: string;
   options: SummaryOptions;
+  /**
+   * Resolved voice text for `options.personality` (empty or absent for the
+   * neutral voice). Resolved by the caller so adapters never read config.
+   */
+  personality?: string;
 }
 
 export interface Summary {

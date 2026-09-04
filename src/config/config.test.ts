@@ -18,7 +18,13 @@ describe('configSchema', () => {
     expect(config.defaults.summarizer).toBe('cli-claude');
     expect(config.defaults.cadence).toEqual({ type: 'daily', at: '08:00' });
     expect(config.defaults.deliver).toEqual({ self_dm: true, group: false, vault: true });
-    expect(config.defaults.summary).toEqual({ language: 'en', style: 'topics', max_words: 300 });
+    expect(config.defaults.summary).toEqual({
+      language: 'en',
+      style: 'topics',
+      max_words: 300,
+      personality: 'neutral',
+      instructions: '',
+    });
     expect(config.limits.max_sends_per_day).toBe(30);
     expect(config.limits.min_group_post_gap_minutes).toBe(60);
     expect(config.retention.days).toBe(30);

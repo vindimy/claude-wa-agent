@@ -264,6 +264,51 @@ Edit the entry, validate, recreate. Things that carry over safely:
   you type in `/digest <name>`. Old notes stay where they are.
 - **Switching the summarizer** takes effect on the next run. See
   "Summarizer adapters" below.
+- **Voice and instructions** (`summary.personality`, `summary.instructions`)
+  also take effect on the next run. A window that was already summarized
+  keeps its stored text; `digest summarize … --fresh` regenerates it.
+
+### Tune the voice and add instructions
+
+`summary.personality` sets the tone, `summary.instructions` tells the model
+things it cannot know from the transcript. Both are plain English.
+
+```yaml
+defaults:
+  summary:
+    personality: dry                       # neutral | dry | friendly | russian-sarcasm | executive | newsroom | butler | hype
+    instructions: "Always call out deadlines and money."
+
+personalities:                             # your own voices, referenced by name
+  grumpy-uncle: >-
+    A grumpy but loving uncle who has seen it all and still gets every fact right.
+
+groups:
+  - jid: "120363012345678901@g.us"
+    name: "Family"
+    summary:
+      personality: grumpy-uncle
+      instructions: "Baba is grandma; the twins are Masha and Dasha."
+```
+
+Rules of thumb:
+
+- The `defaults` instructions apply to every group and a group's own text is
+  appended, so the deadline rule above still applies to Family.
+- A personality changes tone only. The prompt tells the model that the voice
+  never changes, omits, or exaggerates a fact, and that reader instructions
+  win over the voice but never over accuracy.
+- A custom name that matches a preset replaces it, which is the way to tune
+  `friendly` or `dry` without inventing a new name.
+- A typo in a personality name fails validation at startup with the list of
+  available names, so the container will not start with a silent fallback.
+
+Preview a voice on real messages before committing to it:
+
+```bash
+digest summarize "Family" --since 2d --personality russian-sarcasm --dry-run --fresh
+digest summarize "Family" --since 2d --instructions "Ignore the weather chat." --dry-run --fresh
+```
 
 ### Opt a group into posting
 
@@ -332,6 +377,7 @@ digest summarize "Family" --since 2d --dry-run          # print only; stored, no
 digest summarize "Family" --since 2d                    # deliver to the group's configured channels
 digest summarize "Family" --since 2d --fresh            # regenerate even if this window was summarized
 digest summarize "Family" --since 12h --style action-items --language en --max-words 150
+digest summarize "Family" --since 2d --personality butler --instructions "Skip the memes." --dry-run --fresh
 digest summarize "Family" --since 2d --adapter api-anthropic
 digest summarize "Dance planning" --since 1w --post     # also post into the group (needs deliver.group: true)
 ```
@@ -414,7 +460,8 @@ Five adapters exist today:
 | `fake` | none | Deterministic stats; for plumbing checks |
 
 All three API adapters run the same prompt, honour `summary.language`
-(English by default), respect `summary.max_words`, and write a cost estimate into
+(English by default), `summary.personality`, and `summary.instructions`,
+respect `summary.max_words`, and write a cost estimate into
 `runs.cost_usd` from the vendor's published per-token prices (null for a
 model not in the table). The config loader rejects an unknown adapter name
 at the first run with `unknown summarizer "…" (available: fake, cli-claude,
