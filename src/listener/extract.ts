@@ -1,8 +1,11 @@
 import type { proto } from 'baileys';
 import type { MessageKind, NewMessage } from '../store/index.js';
 
+/** A stored-message payload before the listener stamps its tenant on it. */
+export type ExtractedMessage = Omit<NewMessage, 'tenantId'>;
+
 export type IngestAction =
-  | { action: 'insert'; message: NewMessage }
+  | { action: 'insert'; message: ExtractedMessage }
   | { action: 'edit'; groupJid: string; id: string; body: string | null; editedTs: number }
   | { action: 'delete'; groupJid: string; id: string }
   | { action: 'skip'; reason: string };

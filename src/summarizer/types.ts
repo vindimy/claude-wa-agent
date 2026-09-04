@@ -3,6 +3,7 @@ import type { Result } from '../shared/index.js';
 import type { MessageRow } from '../store/index.js';
 
 export interface SummaryInput {
+  tenantId: string;
   groupJid: string;
   groupName: string;
   /** Non-deleted messages in the window, oldest first. */

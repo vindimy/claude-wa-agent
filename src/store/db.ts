@@ -30,18 +30,59 @@ const MIGRATIONS: string[] = [
 
   CREATE INDEX idx_messages_group_ts ON messages (group_jid, ts);
   `,
+  // 002 — tenant_id on every table (ADR 0001). Rebuilds both tables because
+  // SQLite cannot alter a primary key; existing rows become tenant "owner".
+  `
+  CREATE TABLE groups_v2 (
+    tenant_id TEXT NOT NULL,
+    jid TEXT NOT NULL,
+    subject TEXT,
+    participant_count INTEGER,
+    first_seen_ts INTEGER NOT NULL,
+    last_seen_ts INTEGER NOT NULL,
+    PRIMARY KEY (tenant_id, jid)
+  );
+  INSERT INTO groups_v2
+    SELECT 'owner', jid, subject, participant_count, first_seen_ts, last_seen_ts FROM groups;
+  DROP TABLE groups;
+  ALTER TABLE groups_v2 RENAME TO groups;
+
+  CREATE TABLE messages_v2 (
+    tenant_id TEXT NOT NULL,
+    group_jid TEXT NOT NULL,
+    id TEXT NOT NULL,
+    sender_jid TEXT NOT NULL,
+    sender_name TEXT,
+    ts INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    body TEXT,
+    edited_ts INTEGER,
+    deleted INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (tenant_id, group_jid, id)
+  );
+  INSERT INTO messages_v2
+    SELECT 'owner', group_jid, id, sender_jid, sender_name, ts, kind, body, edited_ts, deleted
+    FROM messages;
+  DROP TABLE messages;
+  ALTER TABLE messages_v2 RENAME TO messages;
+
+  CREATE INDEX idx_messages_tenant_group_ts ON messages (tenant_id, group_jid, ts);
+  `,
 ];
 
-export function openDatabase(path: string): Database.Database {
+export const MIGRATION_COUNT = MIGRATIONS.length;
+
+export function openDatabase(path: string, upTo = MIGRATION_COUNT): Database.Database {
   if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true });
   const db = new Database(path);
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
-  migrate(db);
+  migrate(db, upTo);
   return db;
 }
 
-function migrate(db: Database.Database): void {
+/** Apply migrations 1..upTo that are not yet recorded. Exported for tests. */
+export function migrate(db: Database.Database, upTo = MIGRATION_COUNT): void {
   db.exec('CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY)');
   const applied = new Set(
     db
@@ -49,7 +90,7 @@ function migrate(db: Database.Database): void {
       .all()
       .map((r) => (r as { version: number }).version),
   );
-  MIGRATIONS.forEach((sql, i) => {
+  MIGRATIONS.slice(0, upTo).forEach((sql, i) => {
     const version = i + 1;
     if (applied.has(version)) return;
     db.transaction(() => {

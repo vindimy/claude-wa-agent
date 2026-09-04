@@ -90,6 +90,7 @@ describe('cli-claude adapter (unit)', () => {
   it('rejects an empty window without spawning', async () => {
     const s = createClaudeCliSummarizer({ bin: '/nonexistent' });
     const r = await s.summarize({
+      tenantId: 'owner',
       groupJid: 'g@g.us',
       groupName: 'G',
       messages: [],
@@ -110,6 +111,7 @@ describe('cli-claude adapter (unit)', () => {
 
 function fixtureInput(overrides: Partial<SummaryInput> = {}): SummaryInput {
   return {
+    tenantId: 'owner',
     groupJid: '120363000000000001@g.us',
     groupName: 'Dance team',
     messages: loadFixtureTranscript(),

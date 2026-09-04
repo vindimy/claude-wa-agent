@@ -1,8 +1,11 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { type NewMessage, Store } from './store.js';
 
+const T = 'owner';
+
 function msg(overrides: Partial<NewMessage> = {}): NewMessage {
   return {
+    tenantId: T,
     groupJid: 'g1@g.us',
     id: 'MSG1',
     senderJid: '111@s.whatsapp.net',
@@ -23,7 +26,7 @@ describe('Store', () => {
 
   it('inserts and reads back a message', () => {
     store.insertMessage(msg());
-    const row = store.getMessage('g1@g.us', 'MSG1');
+    const row = store.getMessage(T, 'g1@g.us', 'MSG1');
     expect(row?.body).toBe('hello');
     expect(row?.deleted).toBe(false);
     expect(row?.editedTs).toBeNull();
@@ -32,14 +35,14 @@ describe('Store', () => {
   it('ignores redelivery of the same message id', () => {
     store.insertMessage(msg());
     store.insertMessage(msg({ body: 'changed on redelivery' }));
-    expect(store.getMessage('g1@g.us', 'MSG1')?.body).toBe('hello');
-    expect(store.countMessages('g1@g.us')).toBe(1);
+    expect(store.getMessage(T, 'g1@g.us', 'MSG1')?.body).toBe('hello');
+    expect(store.countMessages(T, 'g1@g.us')).toBe(1);
   });
 
   it('applies edits to body and edited_ts', () => {
     store.insertMessage(msg());
-    store.applyEdit('g1@g.us', 'MSG1', 'hello, edited', 1_700_000_100);
-    const row = store.getMessage('g1@g.us', 'MSG1');
+    store.applyEdit(T, 'g1@g.us', 'MSG1', 'hello, edited', 1_700_000_100);
+    const row = store.getMessage(T, 'g1@g.us', 'MSG1');
     expect(row?.body).toBe('hello, edited');
     expect(row?.editedTs).toBe(1_700_000_100);
   });
@@ -47,25 +50,31 @@ describe('Store', () => {
   it('marks messages deleted and excludes them from queries', () => {
     store.insertMessage(msg());
     store.insertMessage(msg({ id: 'MSG2', body: 'second' }));
-    store.markDeleted('g1@g.us', 'MSG1');
-    expect(store.getMessage('g1@g.us', 'MSG1')?.deleted).toBe(true);
-    expect(store.countMessages('g1@g.us')).toBe(1);
-    expect(store.messagesSince('g1@g.us', 0).map((m) => m.id)).toEqual(['MSG2']);
+    store.markDeleted(T, 'g1@g.us', 'MSG1');
+    expect(store.getMessage(T, 'g1@g.us', 'MSG1')?.deleted).toBe(true);
+    expect(store.countMessages(T, 'g1@g.us')).toBe(1);
+    expect(store.messagesSince(T, 'g1@g.us', 0).map((m) => m.id)).toEqual(['MSG2']);
   });
 
   it('filters messagesSince by timestamp', () => {
     store.insertMessage(msg({ id: 'A', ts: 100 }));
     store.insertMessage(msg({ id: 'B', ts: 200 }));
     store.insertMessage(msg({ id: 'C', ts: 300 }));
-    expect(store.messagesSince('g1@g.us', 200).map((m) => m.id)).toEqual(['B', 'C']);
-    expect(store.countMessages('g1@g.us', 200)).toBe(2);
+    expect(store.messagesSince(T, 'g1@g.us', 200).map((m) => m.id)).toEqual(['B', 'C']);
+    expect(store.countMessages(T, 'g1@g.us', 200)).toBe(2);
   });
 
   it('upserts groups, keeping first_seen and refreshing metadata', () => {
-    store.upsertGroup({ jid: 'g1@g.us', subject: 'Old name', seenTs: 100 });
-    store.upsertGroup({ jid: 'g1@g.us', subject: 'New name', participantCount: 5, seenTs: 200 });
-    store.upsertGroup({ jid: 'g1@g.us', seenTs: 300 }); // no subject — must not erase it
-    const groups = store.listGroups();
+    store.upsertGroup({ tenantId: T, jid: 'g1@g.us', subject: 'Old name', seenTs: 100 });
+    store.upsertGroup({
+      tenantId: T,
+      jid: 'g1@g.us',
+      subject: 'New name',
+      participantCount: 5,
+      seenTs: 200,
+    });
+    store.upsertGroup({ tenantId: T, jid: 'g1@g.us', seenTs: 300 }); // no subject — must not erase it
+    const groups = store.listGroups(T);
     expect(groups).toHaveLength(1);
     expect(groups[0]?.subject).toBe('New name');
     expect(groups[0]?.participantCount).toBe(5);
@@ -74,16 +83,35 @@ describe('Store', () => {
   });
 
   it('counts messages per group in listGroups', () => {
-    store.upsertGroup({ jid: 'g1@g.us', seenTs: 100 });
-    store.upsertGroup({ jid: 'g2@g.us', seenTs: 100 });
+    store.upsertGroup({ tenantId: T, jid: 'g1@g.us', seenTs: 100 });
+    store.upsertGroup({ tenantId: T, jid: 'g2@g.us', seenTs: 100 });
     store.insertMessage(msg({ id: 'A' }));
     store.insertMessage(msg({ id: 'B', ts: 1_700_000_050 }));
-    const groups = store.listGroups();
+    const groups = store.listGroups(T);
     const g1 = groups.find((g) => g.jid === 'g1@g.us');
     const g2 = groups.find((g) => g.jid === 'g2@g.us');
     expect(g1?.messageCount).toBe(2);
     expect(g1?.lastMessageTs).toBe(1_700_000_050);
     expect(g2?.messageCount).toBe(0);
     expect(g2?.lastMessageTs).toBeNull();
+  });
+
+  it('never leaks rows across tenants', () => {
+    store.upsertGroup({ tenantId: T, jid: 'g1@g.us', subject: 'Owner group', seenTs: 1 });
+    store.upsertGroup({ tenantId: 'acme', jid: 'g1@g.us', subject: 'Acme group', seenTs: 1 });
+    store.insertMessage(msg({ id: 'A' }));
+    store.insertMessage(msg({ id: 'A', tenantId: 'acme', body: 'acme copy' }));
+    store.insertMessage(msg({ id: 'B', tenantId: 'acme' }));
+
+    expect(store.listGroups(T).map((g) => g.subject)).toEqual(['Owner group']);
+    expect(store.listGroups('acme')[0]?.messageCount).toBe(2);
+    expect(store.countMessages(T, 'g1@g.us')).toBe(1);
+    expect(store.getMessage('acme', 'g1@g.us', 'A')?.body).toBe('acme copy');
+    expect(store.messagesSince('nobody', 'g1@g.us', 0)).toEqual([]);
+
+    store.markDeleted('acme', 'g1@g.us', 'A');
+    store.applyEdit('acme', 'g1@g.us', 'B', 'edited', 5);
+    expect(store.getMessage(T, 'g1@g.us', 'A')?.deleted).toBe(false);
+    expect(store.getMessage(T, 'g1@g.us', 'B')).toBeUndefined();
   });
 });

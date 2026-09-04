@@ -1,4 +1,3 @@
-import { join } from 'node:path';
 import {
   DisconnectReason,
   fetchLatestBaileysVersion,
@@ -8,32 +7,46 @@ import {
 } from 'baileys';
 import qrcode from 'qrcode-terminal';
 import { allowedJids, type Config } from '../config/index.js';
-import { createLogger } from '../shared/index.js';
+import { createLogger, tenantAuthDir } from '../shared/index.js';
 import type { Store } from '../store/index.js';
 import { extractAction } from './extract.js';
-
-const log = createLogger('listener');
 
 const BACKOFF_BASE_MS = 1_000;
 const BACKOFF_CAP_MS = 60_000;
 
 export interface ListenerDeps {
+  tenantId: string;
   config: Config;
   store: Store;
   dataDir: string;
 }
 
+/**
+ * Explicit per-tenant session lifecycle. `logged_out` is terminal until a
+ * human re-pairs; nothing loops on QR generation.
+ */
+export type SessionState = 'connecting' | 'pairing' | 'connected' | 'reconnecting' | 'logged_out';
+
 export interface ListenerHandle {
+  readonly tenantId: string;
+  getState(): SessionState;
   stop(): Promise<void>;
 }
 
 export async function startListener(deps: ListenerDeps): Promise<ListenerHandle> {
-  const { config, store, dataDir } = deps;
+  const { tenantId, config, store, dataDir } = deps;
+  const log = createLogger('listener', { tenant_id: tenantId });
   const allowed = allowedJids(config);
-  const authDir = join(dataDir, 'auth');
+  const authDir = tenantAuthDir(dataDir, tenantId);
 
   let stopped = false;
   let attempt = 0;
+  let state: SessionState = 'connecting';
+  const setState = (next: SessionState) => {
+    if (next === state) return;
+    log.info({ from: state, to: next }, 'session state');
+    state = next;
+  };
   let reconnectTimer: NodeJS.Timeout | undefined;
   let currentSock: ReturnType<typeof makeWASocket> | undefined;
 
@@ -45,7 +58,7 @@ export async function startListener(deps: ListenerDeps): Promise<ListenerHandle>
     const sock = makeWASocket({
       version,
       auth: state,
-      logger: createLogger('baileys'),
+      logger: createLogger('baileys', { tenant_id: tenantId }),
       // no presence broadcast, no read receipts — we are a quiet observer
       markOnlineOnConnect: false,
     });
@@ -57,13 +70,14 @@ export async function startListener(deps: ListenerDeps): Promise<ListenerHandle>
       const { connection, lastDisconnect, qr } = update;
 
       if (qr) {
+        setState('pairing');
         log.info('scan this QR code with WhatsApp (Linked devices > Link a device)');
         qrcode.generate(qr, { small: true });
       }
 
       if (connection === 'open') {
         attempt = 0;
-        log.info('connected');
+        setState('connected');
         void syncGroups(sock);
       }
 
@@ -75,13 +89,15 @@ export async function startListener(deps: ListenerDeps): Promise<ListenerHandle>
         if (stopped) return;
         if (statusCode === DisconnectReason.loggedOut) {
           // Never loop on QR generation after a logout — require manual re-pairing.
+          setState('logged_out');
           log.fatal(
-            { statusCode },
-            'logged out by WhatsApp — delete data/auth and re-pair, listener stopped',
+            { statusCode, authDir },
+            'logged out by WhatsApp — delete the auth dir and re-pair; this tenant is paused',
           );
           stopped = true;
           return;
         }
+        setState('reconnecting');
         attempt += 1;
         const delay = Math.min(BACKOFF_BASE_MS * 2 ** (attempt - 1), BACKOFF_CAP_MS);
         const jitter = delay * (0.5 + Math.random() * 0.5);
@@ -101,16 +117,16 @@ export async function startListener(deps: ListenerDeps): Promise<ListenerHandle>
         const action = extractAction(msg);
         switch (action.action) {
           case 'insert':
-            store.insertMessage(action.message);
-            store.upsertGroup({ jid, seenTs: action.message.ts });
+            store.insertMessage({ tenantId, ...action.message });
+            store.upsertGroup({ tenantId, jid, seenTs: action.message.ts });
             log.debug({ jid, id: action.message.id, kind: action.message.kind }, 'stored message');
             break;
           case 'edit':
-            store.applyEdit(action.groupJid, action.id, action.body, action.editedTs);
+            store.applyEdit(tenantId, action.groupJid, action.id, action.body, action.editedTs);
             log.debug({ jid, id: action.id }, 'applied edit');
             break;
           case 'delete':
-            store.markDeleted(action.groupJid, action.id);
+            store.markDeleted(tenantId, action.groupJid, action.id);
             log.debug({ jid, id: action.id }, 'marked deleted');
             break;
           case 'skip':
@@ -124,7 +140,7 @@ export async function startListener(deps: ListenerDeps): Promise<ListenerHandle>
       const now = Math.floor(Date.now() / 1000);
       for (const u of updates) {
         if (!u.id || !allowed.has(u.id)) continue;
-        store.upsertGroup({ jid: u.id, subject: u.subject ?? null, seenTs: now });
+        store.upsertGroup({ tenantId, jid: u.id, subject: u.subject ?? null, seenTs: now });
       }
     });
   }
@@ -136,6 +152,7 @@ export async function startListener(deps: ListenerDeps): Promise<ListenerHandle>
       let allowedCount = 0;
       for (const g of Object.values(groups)) {
         store.upsertGroup({
+          tenantId,
           jid: g.id,
           subject: g.subject,
           participantCount: g.participants?.length ?? null,
@@ -155,6 +172,8 @@ export async function startListener(deps: ListenerDeps): Promise<ListenerHandle>
   await connect();
 
   return {
+    tenantId,
+    getState: () => state,
     async stop() {
       stopped = true;
       if (reconnectTimer) clearTimeout(reconnectTimer);

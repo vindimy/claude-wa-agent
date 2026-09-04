@@ -5,6 +5,7 @@ import type { SummaryInput } from './types.js';
 
 function input(overrides: Partial<SummaryInput> = {}): SummaryInput {
   return {
+    tenantId: 'owner',
     groupJid: '120363000000000001@g.us',
     groupName: 'Team',
     messages: loadFixtureTranscript(),

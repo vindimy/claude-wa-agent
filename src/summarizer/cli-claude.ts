@@ -89,7 +89,13 @@ export function createClaudeCliSummarizer(opts: AdapterOptions = {}): Summarizer
       if (input.messages.length === 0) return err({ tag: 'empty' as const });
       const prompt = buildPrompt(input);
       log.info(
-        { group: input.groupJid, messages: input.messages.length, chars: prompt.user.length, bin },
+        {
+          tenant_id: input.tenantId,
+          group: input.groupJid,
+          messages: input.messages.length,
+          chars: prompt.user.length,
+          bin,
+        },
         'invoking claude',
       );
       log.debug({ system: prompt.system, user: prompt.user }, 'prompt');

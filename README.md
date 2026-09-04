@@ -6,7 +6,9 @@ summaries on a schedule using locally authenticated AI CLIs (`claude`,
 `gemini`, `codex`). Summaries go to a self-DM, a local Markdown vault, and
 (opt-in only) back into the group.
 
-Single-user, self-hosted, all data stays on disk. Not a SaaS.
+Self-hosted, all data stays on disk. Built tenant-keyed from the start: today
+it runs with a single tenant (`owner`), so it can grow into a bring-your-own-
+account service later without a rewrite (see `CLAUDE.md` and `docs/adr/`).
 
 > **Project status: phase 2 of 7 (summarize on demand).** The agent pairs,
 > ingests allow-listed groups into SQLite, and can summarize any stored window
@@ -81,7 +83,9 @@ pnpm dev
 
 On first run a QR code prints in the terminal. On your phone open
 **WhatsApp → Linked devices → Link a device** and scan it. Auth state is saved
-to `./data/auth/`, so subsequent runs reconnect without a QR.
+to `./data/tenants/owner/auth/`, so subsequent runs reconnect without a QR.
+(An install paired before the tenant layout existed had it in `./data/auth/`;
+the first `digest run` moves it into place automatically.)
 
 Once you see `connected` and `synced participating groups` in the log, open a
 second terminal:
@@ -179,16 +183,21 @@ there is no way to enable it globally.
 
 ```
 data/                    # gitignored, never commit
-├── auth/                # WhatsApp multi-device session (treat as a secret)
-└── digest.db            # SQLite, WAL mode
+├── tenants/
+│   └── owner/
+│       └── auth/        # WhatsApp multi-device session (treat as a secret)
+└── digest.db            # SQLite, WAL mode; every table carries tenant_id
 ```
 
-Tables so far: `groups` (jid, subject, participant count, first/last seen) and
-`messages` (per-group id, sender, timestamp, kind, body, `edited_ts`, soft
-`deleted` flag). Schema changes are versioned migrations in `src/store/db.ts`.
+Tables so far: `groups` (tenant, jid, subject, participant count, first/last
+seen) and `messages` (tenant, group, id, sender, timestamp, kind, body,
+`edited_ts`, soft `deleted` flag). Every query is scoped by `tenant_id`; the
+store has no method that reads across tenants. Schema changes are versioned
+migrations in `src/store/db.ts`; migration 002 moved existing rows under the
+`owner` tenant.
 
-Only one process may use a given `data/auth/` at a time. Never run the host
-and Docker profiles against the same directory.
+Only one process may use a given tenant auth directory at a time. Never run
+the host and Docker profiles against the same directory.
 
 ## Operational behaviour
 
@@ -196,8 +205,11 @@ and Docker profiles against the same directory.
   phase 1. Later phases route all sends through one queue with 2–5 s jitter and
   a daily cap.
 - **Reconnects** use exponential backoff with jitter, capped at 60 s.
-- **Logout (401)** stops the listener and logs at `fatal`. It never loops on QR
-  generation. To re-pair: stop the process, delete `data/auth/`, run again.
+- **Session state is explicit**: `connecting → pairing → connected`, with
+  `reconnecting` and `logged_out` logged as transitions.
+- **Logout (401)** stops that tenant's socket and logs at `fatal`. It never
+  loops on QR generation. To re-pair: stop the process, delete
+  `data/tenants/owner/auth/`, run again.
 - **Edits and deletions** update the stored message, so future summaries reflect
   the latest state.
 

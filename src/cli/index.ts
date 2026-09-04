@@ -9,7 +9,7 @@ import {
   resolveGroupConfig,
 } from '../config/index.js';
 import { startListener } from '../listener/index.js';
-import { createLogger } from '../shared/index.js';
+import { createLogger, migrateLegacyAuthDir, OWNER_TENANT_ID } from '../shared/index.js';
 import { Store } from '../store/index.js';
 import { ADAPTER_NAMES, createSummarizer, type SummarizerError } from '../summarizer/index.js';
 import { parseSince } from './since.js';
@@ -25,6 +25,8 @@ const log = createLogger('cli');
 const configPath = resolve(process.env.CONFIG_PATH ?? './config.yaml');
 const dataDir = resolve(process.env.DATA_DIR ?? './data');
 const dbPath = join(dataDir, 'digest.db');
+// The single-user deployment is tenant "owner"; everything is keyed by it.
+const tenantId = OWNER_TENANT_ID;
 
 function loadConfigOrExit() {
   const result = loadConfig(configPath);
@@ -54,9 +56,14 @@ program
   .description('start the listener (pairs via QR code on first run)')
   .action(async () => {
     const config = loadConfigOrExit();
+    const moved = migrateLegacyAuthDir(dataDir, tenantId);
+    if (moved) log.warn(moved, 'moved legacy auth state into the tenant directory');
     const store = new Store(dbPath);
-    log.info({ configPath, dataDir, allowedGroups: config.groups.length }, 'starting listener');
-    const listener = await startListener({ config, store, dataDir });
+    log.info(
+      { tenant_id: tenantId, configPath, dataDir, allowedGroups: config.groups.length },
+      'starting listener',
+    );
+    const listener = await startListener({ tenantId, config, store, dataDir });
 
     const shutdown = async (signal: string) => {
       log.info({ signal }, 'shutting down');
@@ -75,7 +82,7 @@ program
     const config = loadConfigOrExit();
     const allowed = allowedJids(config);
     const store = new Store(dbPath);
-    const rows = store.listGroups();
+    const rows = store.listGroups(tenantId);
     store.close();
 
     if (rows.length === 0 && allowed.size === 0) {
@@ -111,7 +118,7 @@ function findGroup(config: Config, store: Store, ref: string): ResolvedGroupConf
   if (byJid) return byJid;
   const byName = config.groups.find((g) => g.name?.toLowerCase() === needle);
   if (byName) return resolveGroupConfig(config, byName.jid);
-  const bySubject = store.listGroups().filter((g) => g.subject?.toLowerCase() === needle);
+  const bySubject = store.listGroups(tenantId).filter((g) => g.subject?.toLowerCase() === needle);
   const first = bySubject[0];
   if (bySubject.length === 1 && first) return resolveGroupConfig(config, first.jid);
   return undefined;
@@ -181,7 +188,7 @@ program
           process.exit(1);
         }
 
-        const messages = store.messagesSince(group.jid, since.value);
+        const messages = store.messagesSince(tenantId, group.jid, since.value);
         if (messages.length === 0) {
           console.log(`No messages in ${group.name ?? group.jid} since ${opts.since}.`);
           return;
@@ -211,10 +218,17 @@ program
         const tz = opts.tz ?? cadenceTz ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
 
         log.info(
-          { group: group.jid, adapter: adapterName, messages: messages.length, since: opts.since },
+          {
+            tenant_id: tenantId,
+            group: group.jid,
+            adapter: adapterName,
+            messages: messages.length,
+            since: opts.since,
+          },
           'summarizing (dry run)',
         );
         const result = await summarizer.value.summarize({
+          tenantId,
           groupJid: group.jid,
           groupName: group.name ?? group.jid,
           messages,

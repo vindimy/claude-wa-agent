@@ -8,6 +8,7 @@ const TZ = 'America/Los_Angeles';
 
 function row(overrides: Partial<MessageRow> = {}): MessageRow {
   return {
+    tenantId: 'owner',
     groupJid: 'g@g.us',
     id: 'X',
     senderJid: '15550001111@s.whatsapp.net',
@@ -23,6 +24,7 @@ function row(overrides: Partial<MessageRow> = {}): MessageRow {
 
 function input(messages: MessageRow[], overrides: Partial<SummaryInput> = {}): SummaryInput {
   return {
+    tenantId: 'owner',
     groupJid: 'g@g.us',
     groupName: 'Team',
     messages,

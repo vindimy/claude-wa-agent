@@ -12,6 +12,7 @@ const root = pino({
 
 export type Logger = pino.Logger;
 
-export function createLogger(module: string): Logger {
-  return root.child({ module });
+/** One child logger per module; pass `{ tenant_id }` for tenant-scoped work. */
+export function createLogger(module: string, bindings: Record<string, unknown> = {}): Logger {
+  return root.child({ module, ...bindings });
 }

@@ -1,3 +1,4 @@
+export { MIGRATION_COUNT, migrate, openDatabase } from './db.js';
 export {
   type GroupRow,
   type GroupUpsert,

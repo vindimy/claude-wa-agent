@@ -4,6 +4,7 @@ import { openDatabase } from './db.js';
 export type MessageKind = 'text' | 'image' | 'video' | 'audio' | 'document' | 'sticker' | 'other';
 
 export interface NewMessage {
+  tenantId: string;
   groupJid: string;
   id: string;
   senderJid: string;
@@ -19,6 +20,7 @@ export interface MessageRow extends NewMessage {
 }
 
 export interface GroupUpsert {
+  tenantId: string;
   jid: string;
   subject?: string | null;
   participantCount?: number | null;
@@ -26,6 +28,7 @@ export interface GroupUpsert {
 }
 
 export interface GroupRow {
+  tenantId: string;
   jid: string;
   subject: string | null;
   participantCount: number | null;
@@ -36,6 +39,7 @@ export interface GroupRow {
 }
 
 interface RawMessageRow {
+  tenant_id: string;
   group_jid: string;
   id: string;
   sender_jid: string;
@@ -47,6 +51,10 @@ interface RawMessageRow {
   deleted: number;
 }
 
+/**
+ * Every read and write is scoped by tenant_id. There is deliberately no
+ * method that touches more than one tenant.
+ */
 export class Store {
   private db: Database.Database;
 
@@ -57,14 +65,15 @@ export class Store {
   upsertGroup(g: GroupUpsert): void {
     this.db
       .prepare(
-        `INSERT INTO groups (jid, subject, participant_count, first_seen_ts, last_seen_ts)
-         VALUES (@jid, @subject, @participantCount, @seenTs, @seenTs)
-         ON CONFLICT (jid) DO UPDATE SET
+        `INSERT INTO groups (tenant_id, jid, subject, participant_count, first_seen_ts, last_seen_ts)
+         VALUES (@tenantId, @jid, @subject, @participantCount, @seenTs, @seenTs)
+         ON CONFLICT (tenant_id, jid) DO UPDATE SET
            subject = COALESCE(excluded.subject, groups.subject),
            participant_count = COALESCE(excluded.participant_count, groups.participant_count),
            last_seen_ts = MAX(groups.last_seen_ts, excluded.last_seen_ts)`,
       )
       .run({
+        tenantId: g.tenantId,
         jid: g.jid,
         subject: g.subject ?? null,
         participantCount: g.participantCount ?? null,
@@ -72,18 +81,21 @@ export class Store {
       });
   }
 
-  listGroups(): GroupRow[] {
+  listGroups(tenantId: string): GroupRow[] {
     const rows = this.db
       .prepare(
-        `SELECT g.jid, g.subject, g.participant_count, g.first_seen_ts, g.last_seen_ts,
+        `SELECT g.tenant_id, g.jid, g.subject, g.participant_count, g.first_seen_ts, g.last_seen_ts,
                 COUNT(m.id) AS message_count,
                 MAX(m.ts) AS last_message_ts
          FROM groups g
-         LEFT JOIN messages m ON m.group_jid = g.jid AND m.deleted = 0
-         GROUP BY g.jid
+         LEFT JOIN messages m
+           ON m.tenant_id = g.tenant_id AND m.group_jid = g.jid AND m.deleted = 0
+         WHERE g.tenant_id = ?
+         GROUP BY g.tenant_id, g.jid
          ORDER BY last_message_ts DESC NULLS LAST, g.subject`,
       )
-      .all() as Array<{
+      .all(tenantId) as Array<{
+      tenant_id: string;
       jid: string;
       subject: string | null;
       participant_count: number | null;
@@ -93,6 +105,7 @@ export class Store {
       last_message_ts: number | null;
     }>;
     return rows.map((r) => ({
+      tenantId: r.tenant_id,
       jid: r.jid,
       subject: r.subject,
       participantCount: r.participant_count,
@@ -103,46 +116,63 @@ export class Store {
     }));
   }
 
-  /** Insert a message; redeliveries of the same (group, id) are ignored. */
+  /** Insert a message; redeliveries of the same (tenant, group, id) are ignored. */
   insertMessage(m: NewMessage): void {
     this.db
       .prepare(
-        `INSERT OR IGNORE INTO messages (group_jid, id, sender_jid, sender_name, ts, kind, body)
-         VALUES (@groupJid, @id, @senderJid, @senderName, @ts, @kind, @body)`,
+        `INSERT OR IGNORE INTO messages
+           (tenant_id, group_jid, id, sender_jid, sender_name, ts, kind, body)
+         VALUES (@tenantId, @groupJid, @id, @senderJid, @senderName, @ts, @kind, @body)`,
       )
       .run({ ...m });
   }
 
-  applyEdit(groupJid: string, id: string, body: string | null, editedTs: number): void {
+  applyEdit(
+    tenantId: string,
+    groupJid: string,
+    id: string,
+    body: string | null,
+    editedTs: number,
+  ): void {
     this.db
-      .prepare('UPDATE messages SET body = ?, edited_ts = ? WHERE group_jid = ? AND id = ?')
-      .run(body, editedTs, groupJid, id);
+      .prepare(
+        `UPDATE messages SET body = ?, edited_ts = ?
+         WHERE tenant_id = ? AND group_jid = ? AND id = ?`,
+      )
+      .run(body, editedTs, tenantId, groupJid, id);
   }
 
-  markDeleted(groupJid: string, id: string): void {
+  markDeleted(tenantId: string, groupJid: string, id: string): void {
     this.db
-      .prepare('UPDATE messages SET deleted = 1 WHERE group_jid = ? AND id = ?')
-      .run(groupJid, id);
+      .prepare('UPDATE messages SET deleted = 1 WHERE tenant_id = ? AND group_jid = ? AND id = ?')
+      .run(tenantId, groupJid, id);
   }
 
-  getMessage(groupJid: string, id: string): MessageRow | undefined {
+  getMessage(tenantId: string, groupJid: string, id: string): MessageRow | undefined {
     const r = this.db
-      .prepare('SELECT * FROM messages WHERE group_jid = ? AND id = ?')
-      .get(groupJid, id) as RawMessageRow | undefined;
+      .prepare('SELECT * FROM messages WHERE tenant_id = ? AND group_jid = ? AND id = ?')
+      .get(tenantId, groupJid, id) as RawMessageRow | undefined;
     return r ? toMessageRow(r) : undefined;
   }
 
-  messagesSince(groupJid: string, sinceTs: number): MessageRow[] {
+  messagesSince(tenantId: string, groupJid: string, sinceTs: number): MessageRow[] {
     const rows = this.db
-      .prepare('SELECT * FROM messages WHERE group_jid = ? AND ts >= ? AND deleted = 0 ORDER BY ts')
-      .all(groupJid, sinceTs) as RawMessageRow[];
+      .prepare(
+        `SELECT * FROM messages
+         WHERE tenant_id = ? AND group_jid = ? AND ts >= ? AND deleted = 0
+         ORDER BY ts`,
+      )
+      .all(tenantId, groupJid, sinceTs) as RawMessageRow[];
     return rows.map(toMessageRow);
   }
 
-  countMessages(groupJid: string, sinceTs = 0): number {
+  countMessages(tenantId: string, groupJid: string, sinceTs = 0): number {
     const r = this.db
-      .prepare('SELECT COUNT(*) AS n FROM messages WHERE group_jid = ? AND ts >= ? AND deleted = 0')
-      .get(groupJid, sinceTs) as { n: number };
+      .prepare(
+        `SELECT COUNT(*) AS n FROM messages
+         WHERE tenant_id = ? AND group_jid = ? AND ts >= ? AND deleted = 0`,
+      )
+      .get(tenantId, groupJid, sinceTs) as { n: number };
     return r.n;
   }
 
@@ -153,6 +183,7 @@ export class Store {
 
 function toMessageRow(r: RawMessageRow): MessageRow {
   return {
+    tenantId: r.tenant_id,
     groupJid: r.group_jid,
     id: r.id,
     senderJid: r.sender_jid,
