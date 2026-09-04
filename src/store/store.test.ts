@@ -292,6 +292,31 @@ describe('Store: summaries, runs, deliveries', () => {
   });
 });
 
+describe('Store: retention', () => {
+  it('prunes only this tenant’s messages older than the cutoff', () => {
+    const store = new Store(':memory:');
+    const msg = (tenantId: string, id: string, ts: number) =>
+      store.insertMessage({
+        tenantId,
+        groupJid: 'g@g.us',
+        id,
+        senderJid: 's@s.whatsapp.net',
+        senderName: 'S',
+        ts,
+        kind: 'text',
+        body: 'x',
+      });
+    msg(T, 'old', 100);
+    msg(T, 'edge', 500);
+    msg(T, 'new', 900);
+    msg('acme', 'old', 100);
+    expect(store.pruneMessagesBefore(T, 500)).toBe(1);
+    expect(store.messagesSince(T, 'g@g.us', 0).map((m) => m.id)).toEqual(['edge', 'new']);
+    expect(store.messagesSince('acme', 'g@g.us', 0)).toHaveLength(1);
+    expect(store.pruneMessagesBefore(T, 500)).toBe(0);
+  });
+});
+
 describe('Store: scheduler helpers', () => {
   it('returns recent non-dry runs newest first and looks up a group', () => {
     const store = new Store(':memory:');

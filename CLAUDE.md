@@ -140,6 +140,8 @@ host and docker profiles simultaneously against the same
   `logged_out`) is explicit and surfaced, not inferred from log noise.
 - Every log line carries `tenant_id`.
 - Media is not downloaded by default (`ingest.media: false`). Captions are stored.
+- Messages older than `retention.days` (30 by default; 60/90/180 allowed) are
+  deleted hourly. Summaries, runs, and vault notes are never pruned.
 - Message deletions/edits update the store; summaries reflect the latest state.
 - Secrets only via env (`.env` is gitignored). Never commit `data/`.
 
@@ -230,14 +232,22 @@ single-user agent has run reliably for a month. Do not build multi-tenant
 scaffolding that the single-user path doesn't also use — same code, tenant
 count of one.
 
-## Open questions (resolve before phase 6)
+## Resolved questions (2026-09-04, see `docs/adr/0003-*`)
 
-- Whether unattended use of subscription CLI auth is acceptable under each
-  provider's terms; if not, API adapters become the default.
-- Retention for the owner tenant (default: keep forever). Service tenants get
-  a configurable retention with a 30-day default, decided above.
-- When encryption at rest for auth state and message bodies is introduced:
-  before the first non-owner tenant at the latest.
+- **Unattended use of subscription CLI auth**: acceptable for the owner's
+  personal use only, with this automation never exposed to anyone else
+  (OpenClaw sets the precedent). This is why CLI adapters are owner-only;
+  every other tenant uses `api-*` adapters.
+- **Retention for the owner tenant**: 30 days of messages by default,
+  configurable to 60, 90, or 180 (`retention.days`). Summaries, run records,
+  and vault notes are kept. The scheduler prunes hourly.
+- **Encryption at rest**: not needed now. In Docker the auth state is a
+  read-only mount, and the stored bodies come from groups whose content is
+  already visible to every member. Revisit before the first non-owner tenant.
+
+## Open questions
+
+- None blocking phase 6.
 
 ## Agent skills
 

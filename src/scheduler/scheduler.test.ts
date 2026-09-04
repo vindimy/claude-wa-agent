@@ -198,6 +198,22 @@ describe('scheduler', () => {
     s.stop();
   });
 
+  it('prunes messages past the retention window on tick, at most hourly', async () => {
+    seed(store, G1, NOW - 40 * 86_400, 5); // older than the 30-day default
+    seed(store, G2, NOW - 60, 3);
+    const s = start();
+    await s.tick();
+    expect(store.countMessages('owner', G1)).toBe(0);
+    expect(store.countMessages('owner', G2)).toBe(3);
+    seed(store, G1, NOW - 35 * 86_400, 2);
+    await s.tick(); // same hour: no prune
+    expect(store.countMessages('owner', G1)).toBe(2);
+    clock += 3_600_001;
+    await s.tick();
+    expect(store.countMessages('owner', G1)).toBe(0);
+    s.stop();
+  });
+
   it('describe() reports state without running anything', () => {
     seed(store, G1, NOW - 600);
     const s = start();

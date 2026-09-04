@@ -80,8 +80,12 @@ export const summarizerOptionsSchema = z.object({
   timeout_seconds: z.number().positive().optional(),
 });
 
+/** Message retention in days. Summaries and run records are kept regardless. */
+export const retentionDays = z.union([z.literal(30), z.literal(60), z.literal(90), z.literal(180)]);
+
 export const configSchema = z.object({
   defaults: defaultsSchema.prefault({}),
+  retention: z.object({ days: retentionDays.default(30) }).prefault({}),
   summarizers: z.record(z.string(), summarizerOptionsSchema).default({}),
   vault: z.object({ dir: z.string().default('./vault') }).prefault({}),
   limits: z

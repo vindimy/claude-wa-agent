@@ -271,6 +271,10 @@ text), `runs` (every attempt with status, cost, and watermark), and
 Every query is scoped by `tenant_id`; the store has no method that reads
 across tenants. Schema changes are versioned migrations in `src/store/db.ts`.
 
+Raw messages are kept for `retention.days` (30 by default; 60, 90, or 180
+allowed) and pruned hourly by the running scheduler. Summaries, run records,
+and vault notes are never pruned, so the digests outlive their sources.
+
 Only one process may use a given tenant auth directory at a time. Never run
 the host and Docker profiles against the same directory.
 
@@ -330,7 +334,7 @@ better-sqlite3, zod 4, pino, commander, vitest, biome.
 6. **Docker profile** for a VPS, with CLI-auth mounting or API fallback
 7. Nice-to-have: action items, `/ask <group> <question>`, local dashboard
 
-Open questions are listed in `CLAUDE.md`.
+Design decisions are recorded in `docs/adr/`.
 
 ## License
 

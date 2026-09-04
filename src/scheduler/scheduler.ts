@@ -41,6 +41,7 @@ export interface SchedulerHandle {
 }
 
 const RUN_HORIZON_S = 8 * 86_400;
+const PRUNE_EVERY_MS = 3_600_000;
 
 export function startScheduler(opts: SchedulerOptions): SchedulerHandle {
   const { tenantId, config, store, vaultDir, tickMs = 60_000, now = () => Date.now() } = opts;
@@ -49,6 +50,7 @@ export function startScheduler(opts: SchedulerOptions): SchedulerHandle {
   let stopped = false;
   let running = false;
   let timer: NodeJS.Timeout | undefined;
+  let lastPruneMs: number | undefined;
 
   const groups = (): ResolvedGroupConfig[] =>
     config.groups
@@ -101,11 +103,22 @@ export function startScheduler(opts: SchedulerOptions): SchedulerHandle {
     return result.value.reused ? 'reused' : 'ok';
   }
 
+  /** Apply `retention.days` at most once an hour; messages only, never summaries. */
+  function pruneIfDue(): void {
+    const nowMs = now();
+    if (lastPruneMs !== undefined && nowMs - lastPruneMs < PRUNE_EVERY_MS) return;
+    lastPruneMs = nowMs;
+    const cutoffTs = Math.floor(nowMs / 1000) - config.retention.days * 86_400;
+    const removed = store.pruneMessagesBefore(tenantId, cutoffTs);
+    if (removed > 0) log.info({ removed, days: config.retention.days }, 'pruned old messages');
+  }
+
   async function tick(): Promise<TickOutcome[]> {
     if (running) return [];
     running = true;
     const outcomes: TickOutcome[] = [];
     try {
+      pruneIfDue();
       const nowTs = Math.floor(now() / 1000);
       for (const group of groups()) {
         if (stopped) break;

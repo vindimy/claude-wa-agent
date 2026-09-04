@@ -21,8 +21,15 @@ describe('configSchema', () => {
     expect(config.defaults.summary.max_words).toBe(300);
     expect(config.limits.max_sends_per_day).toBe(30);
     expect(config.limits.min_group_post_gap_minutes).toBe(60);
+    expect(config.retention.days).toBe(30);
     expect(config.ingest.media).toBe(false);
     expect(config.groups).toEqual([]);
+  });
+
+  it('accepts only the supported retention periods', () => {
+    expect(configSchema.parse({ retention: { days: 90 } }).retention.days).toBe(90);
+    expect(configSchema.safeParse({ retention: { days: 45 } }).success).toBe(false);
+    expect(configSchema.safeParse({ retention: { days: 0 } }).success).toBe(false);
   });
 
   it('refuses to enable group posting globally', () => {

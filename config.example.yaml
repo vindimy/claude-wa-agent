@@ -25,6 +25,11 @@ summarizers:
 vault:
   dir: ./vault
 
+# How long raw messages are kept. Summaries, run records, and vault notes are
+# kept regardless. Allowed: 30, 60, 90, 180.
+retention:
+  days: 30
+
 limits:
   max_sends_per_day: 30           # WhatsApp sends per tenant in any rolling 24 h
   min_group_post_gap_minutes: 60  # spacing between two posts into the same group

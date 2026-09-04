@@ -309,6 +309,17 @@ export class Store {
     return r.n;
   }
 
+  /**
+   * Retention: delete this tenant's messages older than `cutoffTs`. Groups,
+   * summaries, runs, and deliveries are kept. Returns the number removed.
+   */
+  pruneMessagesBefore(tenantId: string, cutoffTs: number): number {
+    const r = this.db
+      .prepare('DELETE FROM messages WHERE tenant_id = ? AND ts < ?')
+      .run(tenantId, cutoffTs);
+    return r.changes;
+  }
+
   // --- summaries -----------------------------------------------------------
 
   /** Insert or replace the text for a summary id (replace = `--fresh`). */
