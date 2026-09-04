@@ -27,6 +27,13 @@ export interface DigestRequest {
   summaryOptions?: Partial<SummaryOptions>;
   /** Always send to the self-chat (used for `/digest` replies). */
   forceSelfDm?: boolean;
+  /**
+   * Post into the group when it has `deliver.group: true`. Defaults to true
+   * for scheduled triggers and false for on-demand ones (`manual`, `command`),
+   * so a quick check from the CLI or the self-chat stays private unless the
+   * caller asks otherwise (`digest summarize --post`).
+   */
+  postToGroup?: boolean;
   /** Test seam. */
   summarizerFactory?: (
     name: string,
@@ -183,7 +190,12 @@ export async function runDigest(req: DigestRequest): Promise<Result<DigestResult
 
   if (dryRun) return ok({ kind: 'ok', summary, reused, stats, outcomes: [] });
 
-  const deliver = req.forceSelfDm ? { ...group.deliver, self_dm: true } : group.deliver;
+  const postToGroup = req.postToGroup ?? isScheduledTrigger(trigger);
+  const deliver = {
+    ...group.deliver,
+    self_dm: group.deliver.self_dm || Boolean(req.forceSelfDm),
+    group: group.deliver.group && postToGroup,
+  };
   const outcomes = deliverSummary({
     store,
     summary,
@@ -193,7 +205,18 @@ export async function runDigest(req: DigestRequest): Promise<Result<DigestResult
     nowTs: Math.floor(Date.now() / 1000),
     force: Boolean(req.fresh),
   });
+  if (group.deliver.group && !postToGroup) {
+    outcomes.push({
+      channel: 'group',
+      outcome: 'skipped',
+      reason: 'on-demand runs stay private; scheduled runs post, or pass --post',
+    });
+  }
   return ok({ kind: 'ok', summary, reused, stats, outcomes });
+}
+
+export function isScheduledTrigger(trigger: RunTrigger): boolean {
+  return trigger === 'daily' || trigger === 'weekly' || trigger === 'threshold';
 }
 
 export function describeSummarizerError(e: SummarizerError): string {

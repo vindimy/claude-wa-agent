@@ -261,6 +261,35 @@ describe('Store: summaries, runs, deliveries', () => {
     expect(store.countSentSince(T, 50)).toBe(2);
     expect(store.countSentSince(T, 0)).toBe(3);
   });
+
+  it('reports the last send to a target per channel and tenant', () => {
+    const put = (tenantId: string, summaryId: string, target: string, sentTs: number) =>
+      store.putDelivery({
+        tenantId,
+        summaryId,
+        channel: 'group',
+        status: 'sent',
+        target,
+        createdTs: 1,
+        sentTs,
+      });
+    put(T, 'a', 'g1@g.us', 100);
+    put(T, 'b', 'g1@g.us', 300);
+    put(T, 'c', 'g2@g.us', 900);
+    put('acme', 'd', 'g1@g.us', 5000);
+    store.putDelivery({
+      tenantId: T,
+      summaryId: 'q',
+      channel: 'group',
+      status: 'queued',
+      target: 'g1@g.us',
+      createdTs: 1,
+    });
+    expect(store.lastSentTs(T, 'group', 'g1@g.us')).toBe(300);
+    expect(store.lastSentTs(T, 'group', 'g2@g.us')).toBe(900);
+    expect(store.lastSentTs(T, 'group', 'g3@g.us')).toBeUndefined();
+    expect(store.lastSentTs(T, 'self_dm', 'g1@g.us')).toBeUndefined();
+  });
 });
 
 describe('Store: scheduler helpers', () => {

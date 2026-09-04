@@ -469,6 +469,17 @@ export class Store {
       .run(permanent ? 'failed' : 'queued', error, tenantId, summaryId, channel);
   }
 
+  /** When this tenant last sent on `channel` to `target`, if ever. */
+  lastSentTs(tenantId: string, channel: DeliveryChannel, target: string): number | undefined {
+    const r = this.db
+      .prepare(
+        `SELECT MAX(sent_ts) AS ts FROM deliveries
+         WHERE tenant_id = ? AND channel = ? AND target = ? AND status = 'sent'`,
+      )
+      .get(tenantId, channel, target) as { ts: number | null };
+    return r.ts ?? undefined;
+  }
+
   /** WhatsApp sends (self_dm + group) marked sent at or after `sinceTs`. */
   countSentSince(tenantId: string, sinceTs: number): number {
     const r = this.db

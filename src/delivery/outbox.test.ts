@@ -19,6 +19,8 @@ function fakeTransport(over: Partial<Transport> = {}) {
   return t;
 }
 
+const G = '120363000000000001@g.us';
+
 describe('outbox', () => {
   let store: Store;
   let clock: number;
@@ -39,16 +41,18 @@ describe('outbox', () => {
       channel,
       status: 'queued',
       text: `msg ${id}`,
-      target: channel === 'group' ? 'g@g.us' : null,
+      target: channel === 'group' ? G : null,
       createdTs: Math.floor(clock / 1000),
     });
 
-  const start = (transport: Transport, maxSendsPerDay = 30) => {
+  const start = (transport: Transport, maxSendsPerDay = 30, allowGroup = false) => {
     handle = startOutbox({
       tenantId: 'owner',
       store,
       transport,
       maxSendsPerDay,
+      isGroupPostAllowed: () => allowGroup,
+      minGroupPostGapMs: 3_600_000,
       pollMs: 1_000_000, // never ticks on its own during tests
       jitterMs: [2000, 5000],
       now: () => clock,
@@ -126,7 +130,7 @@ describe('outbox', () => {
     expect(await h.drainOnce()).toEqual({ kind: 'idle' });
   });
 
-  it('never sends group rows in this phase', async () => {
+  it('drops group rows unless the group is opted in at send time', async () => {
     const t = fakeTransport();
     const h = start(t);
     queue('g1', 'group');
@@ -135,6 +139,49 @@ describe('outbox', () => {
       channel: 'group',
       permanent: true,
     });
+    expect(store.getDelivery('owner', 'g1', 'group')?.error).toContain('not enabled');
     expect(t.sent).toEqual([]);
+  });
+
+  it('posts into an opted-in group and counts it against the daily cap', async () => {
+    const t = fakeTransport();
+    const h = start(t, 1, true);
+    queue('g1', 'group');
+    expect(await h.drainOnce()).toEqual({ kind: 'sent', summaryId: 'g1', channel: 'group' });
+    expect(t.sent).toEqual([{ jid: G, text: 'msg g1' }]);
+    queue('s1');
+    expect(await h.drainOnce()).toEqual({ kind: 'capped', sentToday: 1 });
+  });
+
+  it('refuses a group row whose target is not a group JID', async () => {
+    const t = fakeTransport();
+    const h = start(t, 30, true);
+    store.putDelivery({
+      tenantId: 'owner',
+      summaryId: 'bad',
+      channel: 'group',
+      status: 'queued',
+      text: 'x',
+      target: 'me@s.whatsapp.net',
+      createdTs: 1,
+    });
+    expect(await h.drainOnce()).toMatchObject({ kind: 'failed', permanent: true });
+    expect(store.getDelivery('owner', 'bad', 'group')?.error).toContain('not a group JID');
+    expect(t.sent).toEqual([]);
+  });
+
+  it('spaces posts into the same group and lets self-DMs pass meanwhile', async () => {
+    const t = fakeTransport();
+    const h = start(t, 30, true);
+    queue('g1', 'group');
+    expect((await h.drainOnce()).kind).toBe('sent');
+    queue('g2', 'group');
+    clock += 1000;
+    queue('s1');
+    expect(await h.drainOnce()).toEqual({ kind: 'sent', summaryId: 's1', channel: 'self_dm' });
+    expect(await h.drainOnce()).toEqual({ kind: 'held', count: 1 });
+    clock += 3_600_000;
+    expect(await h.drainOnce()).toEqual({ kind: 'sent', summaryId: 'g2', channel: 'group' });
+    expect(t.sent.map((m) => m.jid)).toEqual([G, 'me@s.whatsapp.net', G]);
   });
 });

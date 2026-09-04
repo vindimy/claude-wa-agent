@@ -8,7 +8,7 @@ import { deliverSummary } from './deliver.js';
 const summary: SummaryRecord = {
   tenantId: 'owner',
   id: 'abc',
-  groupJid: 'g@g.us',
+  groupJid: '120363000000000001@g.us',
   sinceTs: 1_756_800_000,
   untilTs: 1_756_990_000,
   watermarkTs: 1_756_980_000,
@@ -87,12 +87,37 @@ describe('deliverSummary', () => {
     expect(dm?.text).toContain('regenerated');
   });
 
-  it('never posts to the group even when configured', () => {
+  it('queues a signed group post addressed to the source group', () => {
     const outcomes = run({ self_dm: false, vault: false, group: true });
-    expect(outcomes).toHaveLength(1);
+    expect(outcomes).toEqual([
+      { channel: 'group', outcome: 'queued', target: '120363000000000001@g.us' },
+    ]);
+    const row = store.getDelivery('owner', 'abc', 'group');
+    expect(row).toMatchObject({ status: 'queued', target: '120363000000000001@g.us' });
+    expect(row?.text).toContain('🤖 Auto-digest');
+    expect(row?.text).toContain('posted by a bot');
+    expect(existsSync(join(vaultDir, 'team'))).toBe(false);
+  });
+
+  it('does not queue a second group post for the same summary', () => {
+    run({ self_dm: false, vault: false, group: true });
+    store.markDeliverySent('owner', 'abc', 'group', '120363000000000001@g.us', 7);
+    expect(run({ self_dm: false, vault: false, group: true })).toEqual([
+      { channel: 'group', outcome: 'already', status: 'sent' },
+    ]);
+  });
+
+  it('refuses a group post whose JID is not a group', () => {
+    const outcomes = deliverSummary({
+      store,
+      summary: { ...summary, groupJid: '15551234567@s.whatsapp.net' },
+      deliver: { self_dm: false, vault: false, group: true },
+      vaultDir,
+      render: { groupName: 'Team', tz: 'UTC' },
+      nowTs: 1,
+    });
     expect(outcomes[0]).toMatchObject({ channel: 'group', outcome: 'skipped' });
     expect(store.getDelivery('owner', 'abc', 'group')).toBeUndefined();
-    expect(existsSync(join(vaultDir, 'team'))).toBe(false);
   });
 
   it('reports a vault write error without touching the delivery row', () => {

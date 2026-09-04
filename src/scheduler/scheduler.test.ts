@@ -161,6 +161,33 @@ describe('scheduler', () => {
     s.stop();
   });
 
+  it('posts into an opted-in group on a scheduled run but not on /digest', async () => {
+    config = configSchema.parse({
+      defaults: { summarizer: 'fake' },
+      groups: [
+        {
+          jid: G2,
+          name: 'Family',
+          cadence: { type: 'threshold', messages: 10, max_hours: 24 },
+          deliver: { self_dm: false, vault: false, group: true },
+        },
+      ],
+    });
+    seed(store, G2, NOW - 60, 12);
+    const s = start();
+    await s.tick();
+    let queued = store.queuedDeliveries('owner');
+    expect(queued.map((d) => [d.channel, d.target])).toEqual([['group', G2]]);
+    expect(queued[0]?.text).toContain('🤖 Auto-digest');
+
+    // Same window again via the self-chat: private reply only, no second post.
+    await s.handleCommand('/digest Family 1d');
+    queued = store.queuedDeliveries('owner');
+    expect(queued.map((d) => d.channel).sort()).toEqual(['group', 'self_dm']);
+    expect(queued.find((d) => d.channel === 'self_dm')?.text).toContain('🤖 Digest: Family');
+    s.stop();
+  });
+
   it('/digest with no args covers every group and reports empty ones', async () => {
     seed(store, G1, NOW - 60, 5);
     const s = start();
@@ -183,6 +210,43 @@ describe('scheduler', () => {
 });
 
 describe('runDigest', () => {
+  it('keeps manual runs private unless postToGroup is set', async () => {
+    const store = new Store(':memory:');
+    const config = configSchema.parse({ groups: [{ jid: G1, deliver: { group: true } }] });
+    seed(store, G1, NOW - 60, 3);
+    const group = {
+      jid: G1,
+      name: 'Team',
+      summarizer: 'fake',
+      cadence: { type: 'manual' as const },
+      deliver: { self_dm: false, group: true, vault: false },
+      summary: { language: 'auto' as const, style: 'topics' as const, max_words: 100 },
+    };
+    const base = {
+      tenantId: 'owner',
+      store,
+      config,
+      group,
+      sinceTs: 0,
+      untilTs: NOW,
+      trigger: 'manual' as const,
+      tz: 'UTC',
+      vaultDir: mkdtempSync(join(tmpdir(), 'v-')),
+      summarizerFactory: fakeFactory,
+    };
+    const quiet = await runDigest(base);
+    expect(quiet.ok && quiet.value.kind === 'ok' && quiet.value.outcomes).toEqual([
+      { channel: 'group', outcome: 'skipped', reason: expect.stringContaining('--post') },
+    ]);
+    expect(store.queuedDeliveries('owner')).toHaveLength(0);
+
+    const posted = await runDigest({ ...base, postToGroup: true });
+    expect(posted.ok && posted.value.kind === 'ok' && posted.value.outcomes).toEqual([
+      { channel: 'group', outcome: 'queued', target: G1 },
+    ]);
+    expect(store.queuedDeliveries('owner')).toHaveLength(1);
+  });
+
   it('records an error run and returns the adapter error', async () => {
     const store = new Store(':memory:');
     const config = configSchema.parse({ groups: [{ jid: G1, name: 'Team' }] });

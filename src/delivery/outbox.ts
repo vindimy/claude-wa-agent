@@ -1,5 +1,6 @@
 import { createLogger } from '../shared/index.js';
 import type { DeliveryRow, Store } from '../store/index.js';
+import { isGroupJid } from './deliver.js';
 import type { Transport } from './types.js';
 
 export interface OutboxOptions {
@@ -8,6 +9,13 @@ export interface OutboxOptions {
   transport: Transport;
   /** Per-tenant cap on WhatsApp sends in any rolling 24 h window. */
   maxSendsPerDay: number;
+  /**
+   * Send-time check that a group still has `deliver.group: true`. Defaults to
+   * "never", so an outbox without it drops every group row.
+   */
+  isGroupPostAllowed?: (groupJid: string) => boolean;
+  /** Minimum spacing between two posts into the same group. */
+  minGroupPostGapMs?: number;
   pollMs?: number;
   /** Human-like pause before each send, [min, max] ms. */
   jitterMs?: [number, number];
@@ -27,6 +35,8 @@ export type DrainResult =
   | { kind: 'idle' }
   | { kind: 'not-connected' }
   | { kind: 'capped'; sentToday: number }
+  /** Only group rows remain and each is inside its per-group gap. */
+  | { kind: 'held'; count: number }
   | { kind: 'sent'; summaryId: string; channel: string }
   | { kind: 'failed'; summaryId: string; channel: string; permanent: boolean };
 
@@ -37,6 +47,11 @@ const DAY_S = 86_400;
  * one at a time, with jitter between sends and a rolling daily cap. Rows
  * survive restarts, so a send that never happened is retried, and a send that
  * happened is never repeated.
+ *
+ * Group rows are the one channel that can reach other people, so they get an
+ * extra gate here: the target must be a group JID that is opted in *at send
+ * time*, and two posts into the same group are spaced by `minGroupPostGapMs`.
+ * A held group row does not block self-DMs queued behind it.
  */
 export function startOutbox(opts: OutboxOptions): OutboxHandle {
   const {
@@ -44,6 +59,8 @@ export function startOutbox(opts: OutboxOptions): OutboxHandle {
     store,
     transport,
     maxSendsPerDay,
+    isGroupPostAllowed = () => false,
+    minGroupPostGapMs = 3_600_000,
     pollMs = 5_000,
     jitterMs = [2_000, 5_000],
     maxAttempts = 5,
@@ -63,12 +80,32 @@ export function startOutbox(opts: OutboxOptions): OutboxHandle {
     return undefined;
   }
 
+  /** Why a row can never be sent, or undefined if it is sendable. */
+  function rejectReason(row: DeliveryRow): string | undefined {
+    // Vault rows are written synchronously by deliverSummary; a queued one
+    // here is a bug, not something to send.
+    if (row.channel === 'vault' || !row.text) return 'not an outbox channel';
+    if (row.channel === 'group') {
+      if (!row.target || !isGroupJid(row.target)) return 'group target is not a group JID';
+      if (!isGroupPostAllowed(row.target)) return `group posting not enabled for ${row.target}`;
+    }
+    return undefined;
+  }
+
+  function heldUntil(row: DeliveryRow, nowS: number): number | undefined {
+    if (row.channel !== 'group' || !row.target || minGroupPostGapMs <= 0) return undefined;
+    const last = store.lastSentTs(tenantId, 'group', row.target);
+    if (last === undefined) return undefined;
+    const until = last + Math.ceil(minGroupPostGapMs / 1000);
+    return until > nowS ? until : undefined;
+  }
+
   async function drainOnce(): Promise<DrainResult> {
     if (busy) return { kind: 'idle' };
     busy = true;
     try {
-      const [row] = store.queuedDeliveries(tenantId, 1);
-      if (!row) return { kind: 'idle' };
+      const rows = store.queuedDeliveries(tenantId, 10);
+      if (rows.length === 0) return { kind: 'idle' };
       if (!transport.isConnected()) return { kind: 'not-connected' };
 
       const nowS = Math.floor(now() / 1000);
@@ -78,30 +115,34 @@ export function startOutbox(opts: OutboxOptions): OutboxHandle {
         return { kind: 'capped', sentToday };
       }
 
-      if (row.channel === 'vault' || !row.text) {
-        // Vault rows are written synchronously by deliverSummary; a queued one
-        // here is a bug, not something to send.
-        store.markDeliveryFailed(
-          tenantId,
-          row.summaryId,
-          row.channel,
-          'not an outbox channel',
-          true,
-        );
-        return { kind: 'failed', summaryId: row.summaryId, channel: row.channel, permanent: true };
+      let held = 0;
+      let row: DeliveryRow | undefined;
+      for (const candidate of rows) {
+        const reason = rejectReason(candidate);
+        if (reason) {
+          store.markDeliveryFailed(tenantId, candidate.summaryId, candidate.channel, reason, true);
+          log.warn(
+            { summaryId: candidate.summaryId, channel: candidate.channel, reason },
+            'dropped',
+          );
+          return {
+            kind: 'failed',
+            summaryId: candidate.summaryId,
+            channel: candidate.channel,
+            permanent: true,
+          };
+        }
+        const until = heldUntil(candidate, nowS);
+        if (until !== undefined) {
+          held += 1;
+          log.debug({ summaryId: candidate.summaryId, target: candidate.target, until }, 'held');
+          continue;
+        }
+        row = candidate;
+        break;
       }
-
-      // Phase 5 turns this on. Until then group rows never leave the queue.
-      if (row.channel === 'group') {
-        store.markDeliveryFailed(
-          tenantId,
-          row.summaryId,
-          row.channel,
-          'group posting disabled',
-          true,
-        );
-        return { kind: 'failed', summaryId: row.summaryId, channel: row.channel, permanent: true };
-      }
+      if (!row) return held > 0 ? { kind: 'held', count: held } : { kind: 'idle' };
+      const text = row.text as string;
 
       const target = resolveTarget(row);
       if (!target) {
@@ -113,7 +154,7 @@ export function startOutbox(opts: OutboxOptions): OutboxHandle {
       await sleep(lo + random() * (hi - lo));
       if (stopped) return { kind: 'idle' };
 
-      const sent = await transport.sendText(target, row.text);
+      const sent = await transport.sendText(target, text);
       const sentS = Math.floor(now() / 1000);
       if (sent.ok) {
         store.markDeliverySent(tenantId, row.summaryId, row.channel, target, sentS);

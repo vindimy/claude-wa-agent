@@ -177,7 +177,10 @@ host and docker profiles simultaneously against the same
    `messages`, auth under `data/tenants/owner/auth/`, tenant on the logger.
    Then idempotent delivery and run records, tenant-keyed from the start.
 4. **Scheduler**: daily/weekly/threshold cadences, restart-safe watermarks.
-5. **Group posting (opt-in)** with send queue and rate limits.
+   *(shipped)*
+5. **Group posting (opt-in)** with send queue and rate limits. Scheduled runs
+   post; on-demand runs (`digest summarize`, `/digest`) stay private unless
+   `--post` is given. *(shipped)*
 6. **Docker profile** on the VPS (doubles as the service profile); document
    CLI-auth mounting or API fallback.
 7. Nice-to-have: action-item extraction, `/ask <group> <question>` over stored
@@ -227,7 +230,7 @@ single-user agent has run reliably for a month. Do not build multi-tenant
 scaffolding that the single-user path doesn't also use — same code, tenant
 count of one.
 
-## Open questions (resolve before phase 5)
+## Open questions (resolve before phase 6)
 
 - Whether unattended use of subscription CLI auth is acceptable under each
   provider's terms; if not, API adapters become the default.

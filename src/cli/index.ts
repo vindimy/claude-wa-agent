@@ -85,6 +85,9 @@ program
       store,
       transport: listener,
       maxSendsPerDay: config.limits.max_sends_per_day,
+      minGroupPostGapMs: config.limits.min_group_post_gap_minutes * 60_000,
+      // Re-checked at send time: only groups opted in via config are posted to.
+      isGroupPostAllowed: (jid) => resolveGroupConfig(config, jid)?.deliver.group === true,
     });
 
     const shutdown = async (signal: string) => {
@@ -159,6 +162,10 @@ function formatOutcome(o: DeliveryOutcome): string {
       if (o.outcome === 'queued') return 'self-DM:  queued — the listener (`digest run`) sends it';
       return o.status === 'sent' ? 'self-DM:  already sent' : 'self-DM:  already queued';
     case 'group':
+      if (o.outcome === 'queued')
+        return `group:    queued for ${o.target} — the listener (\`digest run\`) posts it`;
+      if (o.outcome === 'already')
+        return o.status === 'sent' ? 'group:    already posted' : 'group:    already queued';
       return `group:    skipped — ${o.reason}`;
   }
 }
@@ -170,6 +177,7 @@ program
   .requiredOption('--since <window>', 'relative span (30m, 12h, 2d, 1w) or ISO date')
   .option('--dry-run', 'print the summary instead of delivering it')
   .option('--fresh', 'regenerate even if this exact window was summarized before')
+  .option('--post', 'also post into the group (only if it has deliver.group: true)')
   .option('--adapter <name>', `summarizer adapter (${ADAPTER_NAMES.join(', ')})`)
   .option('--style <style>', 'topics | narrative | action-items')
   .option('--language <lang>', 'auto | ru | en')
@@ -182,6 +190,7 @@ program
         since: string;
         dryRun?: boolean;
         fresh?: boolean;
+        post?: boolean;
         adapter?: string;
         style?: string;
         language?: string;
@@ -228,6 +237,7 @@ program
           vaultDir,
           dryRun: opts.dryRun,
           fresh: opts.fresh,
+          postToGroup: Boolean(opts.post),
           adapter: opts.adapter,
           summaryOptions,
         });
@@ -277,6 +287,7 @@ program
         const due = decision.due ? `DUE (${decision.reason})` : `not due: ${decision.reason}`;
         console.log(`${group.name ?? group.jid}`);
         console.log(`  cadence:   ${cadence}`);
+        console.log(`  deliver:   ${describeDeliver(group.deliver)}`);
         console.log(`  last run:  ${lastStr}`);
         console.log(`  watermark: ${wm}`);
         if (group.cadence.type === 'threshold')
@@ -300,6 +311,11 @@ function describeCadence(c: ResolvedGroupConfig['cadence']): string {
     case 'manual':
       return 'manual only';
   }
+}
+
+function describeDeliver(d: ResolvedGroupConfig['deliver']): string {
+  const on = [d.self_dm && 'self-DM', d.vault && 'vault', d.group && 'GROUP POST'].filter(Boolean);
+  return on.length > 0 ? on.join(', ') : 'nothing';
 }
 
 function fmtTs(ts: number): string {

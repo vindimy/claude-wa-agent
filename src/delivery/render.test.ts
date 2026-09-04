@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import type { SummaryRecord } from '../store/index.js';
-import { renderVaultMarkdown, renderWhatsAppText, slugify, vaultRelativePath } from './render.js';
+import {
+  GROUP_POST_SIGNATURE,
+  renderGroupPostText,
+  renderVaultMarkdown,
+  renderWhatsAppText,
+  slugify,
+  vaultRelativePath,
+} from './render.js';
 
 const s: SummaryRecord = {
   tenantId: 'owner',
@@ -23,6 +30,16 @@ describe('slugify', () => {
     expect(slugify('Zouk Atoms team', 'x')).toBe('zouk-atoms-team');
     expect(slugify('  Семья / Family!  ', 'x')).toBe('семья-family');
     expect(slugify('🎉🎉', '1203@g.us')).toBe('1203');
+  });
+});
+
+describe('renderGroupPostText', () => {
+  it('marks the post as automated at both ends', () => {
+    const t = renderGroupPostText(s, ctx);
+    expect(t.split('\n')[0]).toBe('🤖 Auto-digest · 2025-09-02 → 2025-09-04 · 25 messages');
+    expect(t.endsWith(GROUP_POST_SIGNATURE)).toBe(true);
+    expect(t).toContain('Line one\n- bullet');
+    expect(t).not.toContain('Zouk Atoms team');
   });
 });
 

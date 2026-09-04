@@ -16,4 +16,6 @@ export type DeliveryOutcome =
   | { channel: 'vault'; outcome: 'error'; message: string }
   | { channel: 'self_dm'; outcome: 'queued' }
   | { channel: 'self_dm'; outcome: 'already'; status: 'queued' | 'sent' }
+  | { channel: 'group'; outcome: 'queued'; target: string }
+  | { channel: 'group'; outcome: 'already'; status: 'queued' | 'sent' }
   | { channel: 'group'; outcome: 'skipped'; reason: string };

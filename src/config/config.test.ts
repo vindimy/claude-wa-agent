@@ -20,8 +20,18 @@ describe('configSchema', () => {
     expect(config.defaults.deliver).toEqual({ self_dm: true, group: false, vault: true });
     expect(config.defaults.summary.max_words).toBe(300);
     expect(config.limits.max_sends_per_day).toBe(30);
+    expect(config.limits.min_group_post_gap_minutes).toBe(60);
     expect(config.ingest.media).toBe(false);
     expect(config.groups).toEqual([]);
+  });
+
+  it('refuses to enable group posting globally', () => {
+    const result = configSchema.safeParse({ defaults: { deliver: { group: true } } });
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error.issues[0]?.message).toContain('per group');
+    expect(
+      configSchema.safeParse({ groups: [{ jid: '1@g.us', deliver: { group: true } }] }).success,
+    ).toBe(true);
   });
 
   it('rejects a group JID that is not a group', () => {

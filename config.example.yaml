@@ -26,7 +26,8 @@ vault:
   dir: ./vault
 
 limits:
-  max_sends_per_day: 30   # WhatsApp sends per tenant in any rolling 24 h
+  max_sends_per_day: 30           # WhatsApp sends per tenant in any rolling 24 h
+  min_group_post_gap_minutes: 60  # spacing between two posts into the same group
 
 ingest:
   media: false
@@ -35,6 +36,9 @@ groups:
   - jid: "120363000000000001@g.us"
     name: "Example group"
     cadence: { type: threshold, messages: 150, max_hours: 24 }
+    # Post scheduled digests back into this group, signed "🤖 Auto-digest".
+    # Must be set per group; `defaults.deliver.group: true` is rejected.
+    # deliver: { group: true }
   - jid: "120363000000000002@g.us"
     name: "Family"
     cadence: { type: weekly, day: sun, at: "18:00" }

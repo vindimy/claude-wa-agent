@@ -48,12 +48,19 @@ export const summarySchema = z.object({
 const deliverOverrideSchema = z.object(deliverShape).partial();
 const summaryOverrideSchema = z.object(summaryShape).partial();
 
-const defaultsSchema = z.object({
-  summarizer: z.string().default('cli-claude'),
-  cadence: cadenceSchema.default({ type: 'daily', at: '08:00' }),
-  deliver: deliverSchema.prefault({}),
-  summary: summarySchema.prefault({}),
-});
+const defaultsSchema = z
+  .object({
+    summarizer: z.string().default('cli-claude'),
+    cadence: cadenceSchema.default({ type: 'daily', at: '08:00' }),
+    deliver: deliverSchema.prefault({}),
+    summary: summarySchema.prefault({}),
+  })
+  // Posting into a group is opt-in per group, never global: a summary in the
+  // wrong group is the worst failure mode of this project.
+  .refine((d) => d.deliver.group === false, {
+    message: 'defaults.deliver.group cannot be true; set deliver.group per group instead',
+    path: ['deliver', 'group'],
+  });
 
 const groupJid = z.string().regex(/@g\.us$/, 'expected a group JID ending in @g.us');
 
@@ -77,7 +84,13 @@ export const configSchema = z.object({
   defaults: defaultsSchema.prefault({}),
   summarizers: z.record(z.string(), summarizerOptionsSchema).default({}),
   vault: z.object({ dir: z.string().default('./vault') }).prefault({}),
-  limits: z.object({ max_sends_per_day: z.number().int().positive().default(30) }).prefault({}),
+  limits: z
+    .object({
+      max_sends_per_day: z.number().int().positive().default(30),
+      /** Minimum spacing between two posts into the same group. */
+      min_group_post_gap_minutes: z.number().nonnegative().default(60),
+    })
+    .prefault({}),
   ingest: z.object({ media: z.boolean().default(false) }).prefault({}),
   groups: z.array(groupConfigSchema).default([]),
 });

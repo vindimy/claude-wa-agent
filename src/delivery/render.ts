@@ -34,6 +34,25 @@ export function renderWhatsAppText(s: SummaryRecord, ctx: RenderContext): string
   return [`🤖 Digest: ${ctx.groupName}`, `${windowLabel(s, ctx.tz)} · ${n}`, '', s.text].join('\n');
 }
 
+/** Trailing line on every group post so members know a bot wrote it. */
+export const GROUP_POST_SIGNATURE =
+  '_Automated digest of this chat, posted by a bot, not typed by hand._';
+
+/**
+ * Text for a post back into the source group. Signed at the top and bottom:
+ * the group name is redundant there, the "automated" marker is not.
+ */
+export function renderGroupPostText(s: SummaryRecord, ctx: RenderContext): string {
+  const n = s.messageCount === 1 ? '1 message' : `${s.messageCount} messages`;
+  return [
+    `🤖 Auto-digest · ${windowLabel(s, ctx.tz)} · ${n}`,
+    '',
+    s.text,
+    '',
+    GROUP_POST_SIGNATURE,
+  ].join('\n');
+}
+
 /** Relative path inside the vault: `<group-slug>/<YYYY-MM-DD>-<id>.md`. */
 export function vaultRelativePath(s: SummaryRecord, ctx: RenderContext): string {
   return `${slugify(ctx.groupName, s.groupJid)}/${isoDate(s.untilTs, ctx.tz)}-${s.id}.md`;

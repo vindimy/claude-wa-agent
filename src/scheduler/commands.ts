@@ -52,6 +52,7 @@ export function helpText(config: Config): string {
     '/digest — summarize every group since its last digest',
     '/digest 3d — every group over the last 3 days',
     '/digest <group> [12h|2d|1w] — one group',
+    'Replies come here only; nothing is posted into a group.',
     '',
     'Groups:',
     groups || '(none configured)',

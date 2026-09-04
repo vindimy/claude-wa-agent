@@ -42,7 +42,7 @@ One Node/TypeScript process, split into modules with typed boundaries:
 | `src/config/`    | zod-validated `config.yaml` + env, per-group overrides over defaults   | ✅ done |
 | `src/cli/`       | `digest run`, `digest groups`, `digest summarize`                      | ✅ done |
 | `src/summarizer/`| Adapter interface; `fake` and `cli-claude` shipped, `cli-gemini`, `cli-codex`, `api-*` later | ✅ done |
-| `src/delivery/`  | Idempotent fan-out: self-DM and Markdown vault shipped; group post in phase 5 | ✅ done |
+| `src/delivery/`  | Idempotent fan-out: self-DM, Markdown vault, and opt-in group post through one outbox | ✅ done |
 | `src/scheduler/` | Daily / weekly / threshold triggers, `/digest` commands, restart-safe watermarks | ✅ done |
 
 Cross-module imports go through each module's `index.ts` only. Errors are
@@ -115,6 +115,7 @@ allow-listed groups are ever stored; everything else is dropped at the socket.
 
 | `pnpm digest summarize <group> --since 2d` | Summarize one group's stored messages and deliver to its channels |
 | `pnpm digest summarize <group> --since 2d --dry-run` | Same, but only print; nothing is delivered |
+| `pnpm digest summarize <group> --since 2d --post` | Same, and also post into the group if it has `deliver.group: true` |
 | `pnpm digest schedule` | Show each group's cadence, last run, watermark, and whether it is due now |
 
 `<group>` is a JID, the `name` from `config.yaml`, or the group subject as
@@ -134,12 +135,30 @@ with the last message as a watermark.
 | --------- | ------------------------------------------------------------------------------------- |
 | `vault`   | Written immediately as `<vault.dir>/<group-slug>/<date>-<id>.md` with YAML front matter |
 | `self_dm` | Queued in the database; the running listener (`digest run`) sends it to your own number with 2–5 s jitter and the daily cap |
-| `group`   | Not implemented yet (phase 5). Even with `deliver.group: true` nothing is posted.      |
+| `group`   | Opt-in per group. Queued like a self-DM, posted by the listener, signed "🤖 Auto-digest" with a footer saying a bot wrote it |
 
-Because the self-DM goes through the listener's outbox, `digest summarize` does
+Because WhatsApp sends go through the listener's outbox, `digest summarize` does
 not need its own WhatsApp session and never conflicts with a running `digest
 run`. If the listener is not running, the message waits in the queue until it
 is. Sends are retried up to five times and then marked failed.
+
+#### Group posting
+
+A summary posted into the wrong group is the worst thing this project can do,
+so posting is gated three times:
+
+1. **Config, per group.** `deliver.group: true` must be set on the group
+   itself. Setting it under `defaults:` is a config error.
+2. **Trigger.** Scheduled runs (daily, weekly, threshold) post. On-demand runs
+   stay private: `digest summarize` needs `--post`, and `/digest` from the
+   self-chat never posts. A quick check should not surprise the group.
+3. **Send time.** The outbox re-checks the group's opt-in and that the target
+   is a group JID before every post, so a queued post is dropped if you turn
+   the flag off and restart.
+
+Posts share the daily send cap with self-DMs and the same 2–5 s jitter. Two
+posts into the same group are spaced by `limits.min_group_post_gap_minutes`
+(default 60); a held post does not block self-DMs behind it.
 
 ### Scheduling
 
@@ -171,8 +190,9 @@ Send these to yourself (the "You" chat in WhatsApp) while `digest run` is up:
 /help                   list commands and groups
 ```
 
-Replies always come back as a self-DM, even for groups with `self_dm: false`.
-Only live messages you send are treated as commands; history sync is ignored.
+Replies always come back as a self-DM, even for groups with `self_dm: false`,
+and a `/digest` never posts into the group. Only live messages you send are
+treated as commands; history sync is ignored.
 
 #### Summarizer adapters
 
@@ -227,8 +247,7 @@ groups:
 ```
 
 Cadence types: `daily`, `weekly`, `threshold` (N messages or M hours, whichever
-comes first), `manual`. Cadences are validated now but only acted on from
-phase 4.
+comes first), `manual`.
 
 **`deliver.group` defaults to `false` and must be set per group.** Posting a
 summary into the wrong group is the worst failure mode of this project, so
@@ -307,11 +326,11 @@ better-sqlite3, zod 4, pino, commander, vitest, biome.
 2. ✅ **Summarize on demand** — `fake` and `cli-claude` adapters, `--dry-run`
 3. ✅ **Deliver** to self-DM and Markdown vault with idempotent run records
 4. ✅ **Scheduler** — daily / weekly / threshold cadences, `/digest`, restart-safe watermarks
-5. **Group posting** (opt-in) behind the send queue and rate limits
+5. ✅ **Group posting** (opt-in) behind the send queue and rate limits
 6. **Docker profile** for a VPS, with CLI-auth mounting or API fallback
 7. Nice-to-have: action items, `/ask <group> <question>`, local dashboard
 
-Open questions to settle before phase 5 are listed in `CLAUDE.md`.
+Open questions are listed in `CLAUDE.md`.
 
 ## License
 

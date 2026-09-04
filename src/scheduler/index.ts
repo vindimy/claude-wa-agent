@@ -13,6 +13,7 @@ export {
   type DigestStats,
   describeDigestError,
   describeSummarizerError,
+  isScheduledTrigger,
   runDigest,
 } from './run-digest.js';
 export {

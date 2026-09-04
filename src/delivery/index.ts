@@ -1,7 +1,9 @@
-export { type DeliverArgs, deliverSummary } from './deliver.js';
+export { type DeliverArgs, deliverSummary, isGroupJid } from './deliver.js';
 export { type DrainResult, type OutboxHandle, type OutboxOptions, startOutbox } from './outbox.js';
 export {
+  GROUP_POST_SIGNATURE,
   type RenderContext,
+  renderGroupPostText,
   renderVaultMarkdown,
   renderWhatsAppText,
   slugify,
