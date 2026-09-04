@@ -1,10 +1,11 @@
-export { type ConfigError, loadConfig, overrideSummarizer } from './load.js';
+export { applyDashboardEnv, type ConfigError, loadConfig, overrideSummarizer } from './load.js';
 export { PERSONALITY_PRESETS, personalityNames, resolvePersonality } from './personalities.js';
 export {
   allowedJids,
   type Cadence,
   type Config,
   configSchema,
+  type DashboardConfig,
   type Deliver,
   type GroupConfig,
   joinInstructions,

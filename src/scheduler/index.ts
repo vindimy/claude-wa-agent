@@ -10,6 +10,7 @@ export {
   type DueDecision,
   decideDue,
   defaultLookbackS,
+  describeCadence,
   type GroupScheduleState,
   windowSince,
 } from './cadence.js';

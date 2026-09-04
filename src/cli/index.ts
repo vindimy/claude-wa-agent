@@ -1,7 +1,9 @@
+import { createRequire } from 'node:module';
 import { join, resolve } from 'node:path';
 import { Command } from 'commander';
 import {
   allowedJids,
+  applyDashboardEnv,
   type Config,
   type ConfigError,
   loadConfig,
@@ -10,13 +12,16 @@ import {
   resolveGroupConfig,
   type SummaryOptions,
 } from '../config/index.js';
+import { type DashboardHandle, startDashboard } from '../dashboard/index.js';
 import { type DeliveryOutcome, startOutbox } from '../delivery/index.js';
-import { startListener } from '../listener/index.js';
+import { type SessionState, startListener } from '../listener/index.js';
 import {
   askQuestion,
   describeAskError,
+  describeCadence,
   describeDigestError,
   runDigest,
+  type SchedulerHandle,
   startScheduler,
   systemTimeZone,
 } from '../scheduler/index.js';
@@ -33,6 +38,10 @@ try {
 
 const log = createLogger('cli');
 
+const APP_VERSION: string | undefined = (
+  createRequire(import.meta.url)('../../package.json') as { version?: string }
+).version;
+
 const configPath = resolve(process.env.CONFIG_PATH ?? './config.yaml');
 const dataDir = resolve(process.env.DATA_DIR ?? './data');
 const dbPath = join(dataDir, 'digest.db');
@@ -45,14 +54,39 @@ function loadConfigOrExit() {
     log.error({ error: result.error }, formatConfigError(result.error));
     process.exit(1);
   }
+  const config = applyDashboardEnv(result.value);
   const forced = process.env.SUMMARIZER?.trim();
-  if (!forced) return result.value;
+  if (!forced) return config;
   if (!ADAPTER_NAMES.includes(forced)) {
     log.error({ SUMMARIZER: forced, available: ADAPTER_NAMES }, 'unknown summarizer in SUMMARIZER');
     process.exit(1);
   }
   log.info({ summarizer: forced }, 'SUMMARIZER env overrides the adapter for every group');
-  return overrideSummarizer(result.value, forced);
+  return overrideSummarizer(config, forced);
+}
+
+const startedAtMs = Date.now();
+
+/** Read-only web dashboard, started only when `dashboard.enabled` (or DASHBOARD_PORT) says so. */
+async function maybeStartDashboard(
+  config: Config,
+  store: Store,
+  scheduler: SchedulerHandle,
+  getSessionState: () => SessionState | 'unknown',
+): Promise<DashboardHandle | undefined> {
+  if (!config.dashboard.enabled) return undefined;
+  return startDashboard({
+    tenantId,
+    config,
+    store,
+    host: config.dashboard.host,
+    port: config.dashboard.port,
+    describeSchedule: () => scheduler.describe(),
+    getSessionState,
+    tz: systemTimeZone(),
+    startedAtMs,
+    version: APP_VERSION,
+  });
 }
 
 function formatConfigError(e: ConfigError): string {
@@ -90,6 +124,9 @@ program
       dataDir,
       onCommand: (cmd) => void scheduler.handleCommand(cmd.text),
     });
+    const dashboard = await maybeStartDashboard(config, store, scheduler, () =>
+      listener.getState(),
+    );
     const outbox = startOutbox({
       tenantId,
       store,
@@ -104,6 +141,7 @@ program
       log.info({ signal }, 'shutting down');
       scheduler.stop();
       outbox.stop();
+      await dashboard?.stop();
       await listener.stop();
       store.close();
       process.exit(0);
@@ -351,6 +389,47 @@ program
   );
 
 program
+  .command('dashboard')
+  .description('serve the read-only web dashboard from this shell (session state shows as unknown)')
+  .option(
+    '--port <n>',
+    'port to listen on (default: dashboard.port or DASHBOARD_PORT)',
+    (v: string) => Number.parseInt(v, 10),
+  )
+  .option('--host <addr>', 'address to bind (default: dashboard.host, 127.0.0.1)')
+  .action(async (opts: { port?: number; host?: string }) => {
+    const loaded = loadConfigOrExit();
+    const config: Config = {
+      ...loaded,
+      dashboard: {
+        enabled: true,
+        host: opts.host ?? loaded.dashboard.host,
+        port: opts.port && opts.port > 0 ? opts.port : loaded.dashboard.port,
+      },
+    };
+    const store = new Store(dbPath);
+    const scheduler = startScheduler({
+      tenantId,
+      config,
+      store,
+      vaultDir: resolve(process.env.VAULT_DIR ?? config.vault.dir),
+      // A viewer never runs digests; the huge tick keeps the scheduler idle.
+      tickMs: 2_147_000_000,
+    });
+    const dashboard = await maybeStartDashboard(config, store, scheduler, () => 'unknown');
+    if (!dashboard) return;
+    console.log(`Dashboard at ${dashboard.url} (read-only; Ctrl-C to stop)`);
+    const shutdown = async () => {
+      scheduler.stop();
+      await dashboard.stop();
+      store.close();
+      process.exit(0);
+    };
+    process.on('SIGINT', () => void shutdown());
+    process.on('SIGTERM', () => void shutdown());
+  });
+
+program
   .command('schedule')
   .description('show each group’s cadence, last run, and whether a digest is due now')
   .action(() => {
@@ -384,19 +463,6 @@ program
       store.close();
     }
   });
-
-function describeCadence(c: ResolvedGroupConfig['cadence']): string {
-  switch (c.type) {
-    case 'daily':
-      return `daily at ${c.at}${c.tz ? ` ${c.tz}` : ''}`;
-    case 'weekly':
-      return `weekly on ${c.day} at ${c.at}${c.tz ? ` ${c.tz}` : ''}`;
-    case 'threshold':
-      return `every ${c.messages} messages or ${c.max_hours}h`;
-    case 'manual':
-      return 'manual only';
-  }
-}
 
 function describeDeliver(d: ResolvedGroupConfig['deliver']): string {
   const on = [d.self_dm && 'self-DM', d.vault && 'vault', d.group && 'GROUP POST'].filter(Boolean);

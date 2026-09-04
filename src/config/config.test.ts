@@ -2,7 +2,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { loadConfig, overrideSummarizer } from './load.js';
+import { applyDashboardEnv, loadConfig, overrideSummarizer } from './load.js';
 import { allowedJids, configSchema, resolveGroupConfig } from './schema.js';
 
 function writeTemp(content: string): string {
@@ -155,5 +155,37 @@ describe('overrideSummarizer', () => {
     expect(resolveGroupConfig(forced, '2@g.us')?.summarizer).toBe('api-anthropic');
     // the original is untouched
     expect(resolveGroupConfig(config, '1@g.us')?.summarizer).toBe('fake');
+  });
+});
+
+describe('dashboard section', () => {
+  it('is off by default and bound to loopback', () => {
+    const config = configSchema.parse({});
+    expect(config.dashboard).toEqual({ enabled: false, host: '127.0.0.1', port: 8787 });
+  });
+
+  it('validates the port and accepts a custom bind address', () => {
+    const config = configSchema.parse({
+      dashboard: { enabled: true, host: '0.0.0.0', port: 9000 },
+    });
+    expect(config.dashboard).toEqual({ enabled: true, host: '0.0.0.0', port: 9000 });
+    expect(configSchema.safeParse({ dashboard: { port: 0 } }).success).toBe(false);
+    expect(configSchema.safeParse({ dashboard: { port: 70000 } }).success).toBe(false);
+  });
+
+  it('lets DASHBOARD_PORT and DASHBOARD_HOST override and enable it', () => {
+    const base = configSchema.parse({});
+    expect(applyDashboardEnv(base, {}).dashboard).toEqual(base.dashboard);
+    expect(applyDashboardEnv(base, { DASHBOARD_PORT: '9100' }).dashboard).toEqual({
+      enabled: true,
+      host: '127.0.0.1',
+      port: 9100,
+    });
+    expect(applyDashboardEnv(base, { DASHBOARD_HOST: '0.0.0.0' }).dashboard).toEqual({
+      enabled: false,
+      host: '0.0.0.0',
+      port: 8787,
+    });
+    expect(applyDashboardEnv(base, { DASHBOARD_PORT: 'abc' }).dashboard).toEqual(base.dashboard);
   });
 });

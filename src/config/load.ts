@@ -25,6 +25,30 @@ export function overrideSummarizer(config: Config, name: string): Config {
   };
 }
 
+/**
+ * `DASHBOARD_PORT` turns the dashboard on and picks its port; `DASHBOARD_HOST`
+ * changes the bind address (Docker needs 0.0.0.0 inside the container). Both
+ * are optional runtime overrides so config.yaml stays identical across
+ * profiles. An unparsable port is ignored.
+ */
+export function applyDashboardEnv(
+  config: Config,
+  env: Record<string, string | undefined> = process.env,
+): Config {
+  const port = env.DASHBOARD_PORT?.trim();
+  const host = env.DASHBOARD_HOST?.trim();
+  const parsedPort = port ? Number.parseInt(port, 10) : Number.NaN;
+  const validPort = Number.isInteger(parsedPort) && parsedPort >= 1 && parsedPort <= 65535;
+  return {
+    ...config,
+    dashboard: {
+      enabled: validPort ? true : config.dashboard.enabled,
+      host: host || config.dashboard.host,
+      port: validPort ? parsedPort : config.dashboard.port,
+    },
+  };
+}
+
 export function loadConfig(path: string): Result<Config, ConfigError> {
   let text: string;
   try {

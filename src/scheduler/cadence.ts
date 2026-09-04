@@ -11,6 +11,20 @@ export const RETRY_AFTER_S = 30 * 60;
 /** Attempts per scheduled occurrence before giving up until the next one. */
 export const MAX_ATTEMPTS_PER_OCCURRENCE = 3;
 
+/** One-line human description of a cadence, shared by the CLI and dashboard. */
+export function describeCadence(c: Cadence): string {
+  switch (c.type) {
+    case 'daily':
+      return `daily at ${c.at}${c.tz ? ` ${c.tz}` : ''}`;
+    case 'weekly':
+      return `weekly on ${c.day} at ${c.at}${c.tz ? ` ${c.tz}` : ''}`;
+    case 'threshold':
+      return `every ${c.messages} messages or ${c.max_hours}h`;
+    case 'manual':
+      return 'manual only';
+  }
+}
+
 export interface GroupScheduleState {
   /** Non-dry runs for this group, newest first, covering at least the last occurrence. */
   runs: RunRecord[];

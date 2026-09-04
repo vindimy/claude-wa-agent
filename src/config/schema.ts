@@ -109,6 +109,16 @@ export const configSchema = z
       })
       .prefault({}),
     ingest: z.object({ media: z.boolean().default(false) }).prefault({}),
+    // Read-only local web dashboard, off by default. Bound to loopback; in
+    // Docker set host 0.0.0.0 (or DASHBOARD_HOST) and publish the port to
+    // the VPS loopback only.
+    dashboard: z
+      .object({
+        enabled: z.boolean().default(false),
+        host: z.string().trim().min(1).default('127.0.0.1'),
+        port: z.number().int().min(1).max(65535).default(8787),
+      })
+      .prefault({}),
     groups: z.array(groupConfigSchema).default([]),
   })
   // Every personality named anywhere must exist, so a typo fails at load
@@ -136,6 +146,7 @@ export type Deliver = z.infer<typeof deliverSchema>;
 export type SummaryOptions = z.infer<typeof summarySchema>;
 export type SummarizerOptions = z.infer<typeof summarizerOptionsSchema>;
 export type GroupConfig = z.infer<typeof groupConfigSchema>;
+export type DashboardConfig = Config['dashboard'];
 export type Config = z.infer<typeof configSchema>;
 
 /** A group's config with every default from `defaults` applied. */
