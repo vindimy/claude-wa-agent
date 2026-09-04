@@ -40,7 +40,8 @@ export const deliverSchema = z.object({
 });
 
 export const summarySchema = z.object({
-  language: summaryShape.language.default('auto'),
+  // English by default; `auto` keeps the chat's own Russian/English mix.
+  language: summaryShape.language.default('en'),
   style: summaryShape.style.default('topics'),
   max_words: summaryShape.max_words.default(300),
 });

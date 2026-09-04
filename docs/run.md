@@ -379,8 +379,8 @@ Five adapters exist today:
 | `api-google` | `GOOGLE_API_KEY` (or `GEMINI_API_KEY`) in `.env` | Default model `gemini-3.8-flash`; `gemini-3.1-pro-preview` for the larger model |
 | `fake` | none | Deterministic stats; for plumbing checks |
 
-All three API adapters run the same prompt, keep the transcript's language
-mix, respect `summary.max_words`, and write a cost estimate into
+All three API adapters run the same prompt, honour `summary.language`
+(English by default), respect `summary.max_words`, and write a cost estimate into
 `runs.cost_usd` from the vendor's published per-token prices (null for a
 model not in the table). The config loader rejects an unknown adapter name
 at the first run with `unknown summarizer "…" (available: fake, cli-claude,

@@ -36,8 +36,9 @@ Scale comes from the tenant key, not from redesigns.
    vault directory for the owner; the service profile keeps the same store on
    its own volume (object storage for auth/state later). No third-party message
    storage. No cross-tenant reads, ever.
-6. Groups are multilingual (Russian + English). Summaries must preserve the
-   language mix of the source unless a group config sets `summary.language`.
+6. Groups are multilingual (Russian + English). Summaries are written in
+   English by default (`summary.language: en`); a group config can pin `ru`
+   or set `auto` to preserve the source's language mix.
 
 ## Architecture
 

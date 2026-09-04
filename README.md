@@ -227,9 +227,9 @@ treated as commands; history sync is ignored.
 | `api-google` | Calls the Gemini API with `GOOGLE_API_KEY` (or `GEMINI_API_KEY`). Default model `gemini-3.8-flash`; `gemini-3.1-pro-preview` for the larger model. Thinking tokens are billed as output and counted in the cost estimate. |
 | `fake`       | Deterministic stats-only output with no external call. For tests and plumbing. |
 
-The prompt asks for plain WhatsApp-friendly text, keeps the transcript's
-Russian/English mix unless `summary.language` pins one, and hard-caps length at
-`summary.max_words`. Per-adapter `model`, `timeout_seconds`, and `bin` live
+The prompt asks for plain WhatsApp-friendly text, writes in English unless
+`summary.language` says otherwise (`ru`, or `auto` to keep the transcript's
+Russian/English mix), and hard-caps length at `summary.max_words`. Per-adapter `model`, `timeout_seconds`, and `bin` live
 under `summarizers:` in `config.yaml`. `SUMMARIZER=<adapter>` in the
 environment forces one adapter for every group without editing the file.
 
@@ -260,7 +260,7 @@ defaults:
   summarizer: cli-claude        # fake | cli-claude | api-anthropic | api-openai | api-google
   cadence: { type: daily, at: "08:00", tz: "America/Los_Angeles" }
   deliver: { self_dm: true, group: false, vault: true }
-  summary: { language: auto, style: topics, max_words: 300 }
+  summary: { language: en, style: topics, max_words: 300 }   # language: auto keeps the chat's mix
 
 limits:
   max_sends_per_day: 30
