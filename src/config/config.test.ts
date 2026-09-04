@@ -108,6 +108,8 @@ describe('summarizers section', () => {
   it('defaults to an empty map and validates per-adapter options', () => {
     const empty = configSchema.parse({});
     expect(empty.summarizers).toEqual({});
+    expect(empty.vault.dir).toBe('./vault');
+    expect(configSchema.parse({ vault: { dir: '/notes' } }).vault.dir).toBe('/notes');
     const parsed = configSchema.parse({
       summarizers: { 'cli-claude': { model: 'sonnet', timeout_seconds: 120 } },
     });

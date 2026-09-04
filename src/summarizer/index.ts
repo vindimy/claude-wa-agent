@@ -1,6 +1,6 @@
 export { createClaudeCliSummarizer, parseClaudeOutput } from './cli-claude.js';
 export { createFakeSummarizer } from './fake.js';
-export { buildPrompt, formatTranscript, type Prompt } from './prompt.js';
+export { buildPrompt, formatDay, formatTime, formatTranscript, type Prompt } from './prompt.js';
 export { ADAPTER_NAMES, createSummarizer, type UnknownAdapterError } from './registry.js';
 export type {
   AdapterOptions,

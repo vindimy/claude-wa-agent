@@ -2,12 +2,14 @@ import {
   DisconnectReason,
   fetchLatestBaileysVersion,
   isJidGroup,
+  jidNormalizedUser,
   makeWASocket,
   useMultiFileAuthState,
 } from 'baileys';
 import qrcode from 'qrcode-terminal';
 import { allowedJids, type Config } from '../config/index.js';
-import { createLogger, tenantAuthDir } from '../shared/index.js';
+import type { Transport } from '../delivery/index.js';
+import { createLogger, err, ok, tenantAuthDir } from '../shared/index.js';
 import type { Store } from '../store/index.js';
 import { extractAction } from './extract.js';
 
@@ -27,7 +29,7 @@ export interface ListenerDeps {
  */
 export type SessionState = 'connecting' | 'pairing' | 'connected' | 'reconnecting' | 'logged_out';
 
-export interface ListenerHandle {
+export interface ListenerHandle extends Transport {
   readonly tenantId: string;
   getState(): SessionState;
   stop(): Promise<void>;
@@ -174,6 +176,21 @@ export async function startListener(deps: ListenerDeps): Promise<ListenerHandle>
   return {
     tenantId,
     getState: () => state,
+    isConnected: () => state === 'connected' && currentSock !== undefined,
+    selfJid: () => {
+      const id = currentSock?.user?.id;
+      return id ? jidNormalizedUser(id) : undefined;
+    },
+    async sendText(jid, text) {
+      const sock = currentSock;
+      if (state !== 'connected' || !sock) return err({ tag: 'not-connected' as const });
+      try {
+        await sock.sendMessage(jid, { text });
+        return ok(undefined);
+      } catch (e) {
+        return err({ tag: 'send' as const, message: e instanceof Error ? e.message : String(e) });
+      }
+    },
     async stop() {
       stopped = true;
       if (reconnectTimer) clearTimeout(reconnectTimer);

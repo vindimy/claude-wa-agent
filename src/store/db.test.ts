@@ -47,6 +47,15 @@ describe('migrations', () => {
        VALUES ('acme', 'g1@g.us', 'M1', 'x', 1, 'text')`,
     ).run();
     expect(db.prepare('SELECT COUNT(*) AS n FROM messages').get()).toEqual({ n: 3 });
+
+    // 003 tables exist and are tenant-keyed
+    for (const table of ['summaries', 'runs', 'deliveries']) {
+      const cols = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+      expect(
+        cols.map((c) => c.name),
+        table,
+      ).toContain('tenant_id');
+    }
     db.close();
   });
 

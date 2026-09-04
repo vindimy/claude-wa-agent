@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import { openDatabase } from './db.js';
 
@@ -36,6 +37,113 @@ export interface GroupRow {
   lastSeenTs: number;
   messageCount: number;
   lastMessageTs: number | null;
+}
+
+export type RunTrigger = 'manual' | 'daily' | 'weekly' | 'threshold';
+export type RunStatus = 'ok' | 'error' | 'empty';
+export type DeliveryChannel = 'self_dm' | 'vault' | 'group';
+export type DeliveryStatus = 'queued' | 'sent' | 'failed';
+
+export interface SummaryRecord {
+  tenantId: string;
+  /** Stable id derived from the window identity; see `summaryId()`. */
+  id: string;
+  groupJid: string;
+  sinceTs: number;
+  untilTs: number;
+  watermarkTs: number;
+  watermarkId: string;
+  messageCount: number;
+  adapter: string;
+  model: string | null;
+  text: string;
+  createdTs: number;
+}
+
+export interface RunRecord {
+  tenantId: string;
+  id: string;
+  groupJid: string;
+  trigger: RunTrigger;
+  dryRun: boolean;
+  sinceTs: number;
+  untilTs: number;
+  messageCount: number;
+  watermarkTs: number | null;
+  watermarkId: string | null;
+  summaryId: string | null;
+  adapter: string;
+  model: string | null;
+  status: RunStatus;
+  error: string | null;
+  costUsd: number | null;
+  durationMs: number | null;
+  createdTs: number;
+}
+
+export interface DeliveryRow {
+  tenantId: string;
+  summaryId: string;
+  channel: DeliveryChannel;
+  /** File path for vault; JID for WhatsApp channels (set when sent). */
+  target: string | null;
+  /** Rendered message for outbox channels; null for vault. */
+  text: string | null;
+  status: DeliveryStatus;
+  attempts: number;
+  error: string | null;
+  createdTs: number;
+  sentTs: number | null;
+}
+
+/**
+ * A summary's identity is the set of messages it covers: same tenant, group,
+ * first message, and last message → same id. A relative `--since` that shifts
+ * by a few seconds between invocations still maps to the same summary as long
+ * as the same messages fall inside it. Re-running reuses the stored text and
+ * retries only channels that have not been delivered.
+ */
+export function summaryId(bounds: {
+  tenantId: string;
+  groupJid: string;
+  firstTs: number;
+  firstId: string;
+  lastTs: number;
+  lastId: string;
+}): string {
+  const { tenantId, groupJid, firstTs, firstId, lastTs, lastId } = bounds;
+  return createHash('sha256')
+    .update([tenantId, groupJid, firstTs, firstId, lastTs, lastId].join('\n'))
+    .digest('hex')
+    .slice(0, 16);
+}
+
+interface RawSummaryRow {
+  tenant_id: string;
+  id: string;
+  group_jid: string;
+  since_ts: number;
+  until_ts: number;
+  watermark_ts: number;
+  watermark_id: string;
+  message_count: number;
+  adapter: string;
+  model: string | null;
+  text: string;
+  created_ts: number;
+}
+
+interface RawDeliveryRow {
+  tenant_id: string;
+  summary_id: string;
+  channel: string;
+  target: string | null;
+  text: string | null;
+  status: string;
+  attempts: number;
+  error: string | null;
+  created_ts: number;
+  sent_ts: number | null;
 }
 
 interface RawMessageRow {
@@ -176,9 +284,201 @@ export class Store {
     return r.n;
   }
 
+  // --- summaries -----------------------------------------------------------
+
+  /** Insert or replace the text for a summary id (replace = `--fresh`). */
+  upsertSummary(sm: SummaryRecord): void {
+    this.db
+      .prepare(
+        `INSERT INTO summaries (tenant_id, id, group_jid, since_ts, until_ts, watermark_ts,
+           watermark_id, message_count, adapter, model, text, created_ts)
+         VALUES (@tenantId, @id, @groupJid, @sinceTs, @untilTs, @watermarkTs,
+           @watermarkId, @messageCount, @adapter, @model, @text, @createdTs)
+         ON CONFLICT (tenant_id, id) DO UPDATE SET
+           until_ts = excluded.until_ts,
+           message_count = excluded.message_count,
+           adapter = excluded.adapter,
+           model = excluded.model,
+           text = excluded.text,
+           created_ts = excluded.created_ts`,
+      )
+      .run({ ...sm });
+  }
+
+  getSummary(tenantId: string, id: string): SummaryRecord | undefined {
+    const r = this.db
+      .prepare('SELECT * FROM summaries WHERE tenant_id = ? AND id = ?')
+      .get(tenantId, id) as RawSummaryRow | undefined;
+    return r ? toSummaryRecord(r) : undefined;
+  }
+
+  // --- runs ----------------------------------------------------------------
+
+  insertRun(run: RunRecord): void {
+    this.db
+      .prepare(
+        `INSERT INTO runs (tenant_id, id, group_jid, trigger, dry_run, since_ts, until_ts,
+           message_count, watermark_ts, watermark_id, summary_id, adapter, model, status,
+           error, cost_usd, duration_ms, created_ts)
+         VALUES (@tenantId, @id, @groupJid, @trigger, @dryRun, @sinceTs, @untilTs,
+           @messageCount, @watermarkTs, @watermarkId, @summaryId, @adapter, @model, @status,
+           @error, @costUsd, @durationMs, @createdTs)`,
+      )
+      .run({ ...run, dryRun: run.dryRun ? 1 : 0 });
+  }
+
+  /** Watermark of the latest successful, delivered (non-dry) run for a group. */
+  lastWatermark(
+    tenantId: string,
+    groupJid: string,
+  ): { watermarkTs: number; watermarkId: string } | undefined {
+    const r = this.db
+      .prepare(
+        `SELECT watermark_ts, watermark_id FROM runs
+         WHERE tenant_id = ? AND group_jid = ? AND dry_run = 0 AND status = 'ok'
+           AND watermark_ts IS NOT NULL
+         ORDER BY watermark_ts DESC, created_ts DESC LIMIT 1`,
+      )
+      .get(tenantId, groupJid) as { watermark_ts: number; watermark_id: string } | undefined;
+    return r ? { watermarkTs: r.watermark_ts, watermarkId: r.watermark_id } : undefined;
+  }
+
+  // --- deliveries ----------------------------------------------------------
+
+  getDelivery(
+    tenantId: string,
+    summaryId: string,
+    channel: DeliveryChannel,
+  ): DeliveryRow | undefined {
+    const r = this.db
+      .prepare('SELECT * FROM deliveries WHERE tenant_id = ? AND summary_id = ? AND channel = ?')
+      .get(tenantId, summaryId, channel) as RawDeliveryRow | undefined;
+    return r ? toDeliveryRow(r) : undefined;
+  }
+
+  /** Create or reset a delivery row (a failed row can be re-queued this way). */
+  putDelivery(d: {
+    tenantId: string;
+    summaryId: string;
+    channel: DeliveryChannel;
+    status: DeliveryStatus;
+    target?: string | null;
+    text?: string | null;
+    createdTs: number;
+    sentTs?: number | null;
+  }): void {
+    this.db
+      .prepare(
+        `INSERT INTO deliveries (tenant_id, summary_id, channel, target, text, status, attempts,
+           error, created_ts, sent_ts)
+         VALUES (@tenantId, @summaryId, @channel, @target, @text, @status, 0, NULL, @createdTs,
+           @sentTs)
+         ON CONFLICT (tenant_id, summary_id, channel) DO UPDATE SET
+           target = excluded.target, text = excluded.text, status = excluded.status,
+           attempts = 0, error = NULL, created_ts = excluded.created_ts,
+           sent_ts = excluded.sent_ts`,
+      )
+      .run({
+        tenantId: d.tenantId,
+        summaryId: d.summaryId,
+        channel: d.channel,
+        status: d.status,
+        target: d.target ?? null,
+        text: d.text ?? null,
+        createdTs: d.createdTs,
+        sentTs: d.sentTs ?? null,
+      });
+  }
+
+  queuedDeliveries(tenantId: string, limit = 10): DeliveryRow[] {
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM deliveries WHERE tenant_id = ? AND status = 'queued'
+         ORDER BY created_ts LIMIT ?`,
+      )
+      .all(tenantId, limit) as RawDeliveryRow[];
+    return rows.map(toDeliveryRow);
+  }
+
+  markDeliverySent(
+    tenantId: string,
+    summaryId: string,
+    channel: DeliveryChannel,
+    target: string,
+    sentTs: number,
+  ): void {
+    this.db
+      .prepare(
+        `UPDATE deliveries SET status = 'sent', target = ?, sent_ts = ?, error = NULL,
+           attempts = attempts + 1
+         WHERE tenant_id = ? AND summary_id = ? AND channel = ?`,
+      )
+      .run(target, sentTs, tenantId, summaryId, channel);
+  }
+
+  /** Record a failed attempt; `permanent` moves it to `failed`, else it stays queued. */
+  markDeliveryFailed(
+    tenantId: string,
+    summaryId: string,
+    channel: DeliveryChannel,
+    error: string,
+    permanent: boolean,
+  ): void {
+    this.db
+      .prepare(
+        `UPDATE deliveries SET status = ?, error = ?, attempts = attempts + 1
+         WHERE tenant_id = ? AND summary_id = ? AND channel = ?`,
+      )
+      .run(permanent ? 'failed' : 'queued', error, tenantId, summaryId, channel);
+  }
+
+  /** WhatsApp sends (self_dm + group) marked sent at or after `sinceTs`. */
+  countSentSince(tenantId: string, sinceTs: number): number {
+    const r = this.db
+      .prepare(
+        `SELECT COUNT(*) AS n FROM deliveries
+         WHERE tenant_id = ? AND status = 'sent' AND channel IN ('self_dm', 'group')
+           AND sent_ts >= ?`,
+      )
+      .get(tenantId, sinceTs) as { n: number };
+    return r.n;
+  }
+
   close(): void {
     this.db.close();
   }
+}
+
+function toSummaryRecord(r: RawSummaryRow): SummaryRecord {
+  return {
+    tenantId: r.tenant_id,
+    id: r.id,
+    groupJid: r.group_jid,
+    sinceTs: r.since_ts,
+    untilTs: r.until_ts,
+    watermarkTs: r.watermark_ts,
+    watermarkId: r.watermark_id,
+    messageCount: r.message_count,
+    adapter: r.adapter,
+    model: r.model,
+    text: r.text,
+    createdTs: r.created_ts,
+  };
+}
+
+function toDeliveryRow(r: RawDeliveryRow): DeliveryRow {
+  return {
+    tenantId: r.tenant_id,
+    summaryId: r.summary_id,
+    channel: r.channel as DeliveryChannel,
+    target: r.target,
+    text: r.text,
+    status: r.status as DeliveryStatus,
+    attempts: r.attempts,
+    error: r.error,
+    createdTs: r.created_ts,
+    sentTs: r.sent_ts,
+  };
 }
 
 function toMessageRow(r: RawMessageRow): MessageRow {

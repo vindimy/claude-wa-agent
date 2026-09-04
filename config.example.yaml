@@ -20,8 +20,13 @@ summarizers:
     timeout_seconds: 180
     # bin: /usr/local/bin/claude
 
+# Markdown notes vault. One note per summary: <dir>/<group-slug>/<date>-<id>.md
+# Override at runtime with VAULT_DIR.
+vault:
+  dir: ./vault
+
 limits:
-  max_sends_per_day: 30
+  max_sends_per_day: 30   # WhatsApp sends per tenant in any rolling 24 h
 
 ingest:
   media: false

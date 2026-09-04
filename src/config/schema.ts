@@ -76,6 +76,7 @@ export const summarizerOptionsSchema = z.object({
 export const configSchema = z.object({
   defaults: defaultsSchema.prefault({}),
   summarizers: z.record(z.string(), summarizerOptionsSchema).default({}),
+  vault: z.object({ dir: z.string().default('./vault') }).prefault({}),
   limits: z.object({ max_sends_per_day: z.number().int().positive().default(30) }).prefault({}),
   ingest: z.object({ media: z.boolean().default(false) }).prefault({}),
   groups: z.array(groupConfigSchema).default([]),

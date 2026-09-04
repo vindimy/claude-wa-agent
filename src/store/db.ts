@@ -68,6 +68,63 @@ const MIGRATIONS: string[] = [
 
   CREATE INDEX idx_messages_tenant_group_ts ON messages (tenant_id, group_jid, ts);
   `,
+  // 003 — summaries, runs, deliveries (phase 3)
+  `
+  CREATE TABLE summaries (
+    tenant_id TEXT NOT NULL,
+    id TEXT NOT NULL,
+    group_jid TEXT NOT NULL,
+    since_ts INTEGER NOT NULL,
+    until_ts INTEGER NOT NULL,
+    watermark_ts INTEGER NOT NULL,
+    watermark_id TEXT NOT NULL,
+    message_count INTEGER NOT NULL,
+    adapter TEXT NOT NULL,
+    model TEXT,
+    text TEXT NOT NULL,
+    created_ts INTEGER NOT NULL,
+    PRIMARY KEY (tenant_id, id)
+  );
+  CREATE INDEX idx_summaries_tenant_group ON summaries (tenant_id, group_jid, watermark_ts);
+
+  CREATE TABLE runs (
+    tenant_id TEXT NOT NULL,
+    id TEXT NOT NULL,
+    group_jid TEXT NOT NULL,
+    trigger TEXT NOT NULL,
+    dry_run INTEGER NOT NULL DEFAULT 0,
+    since_ts INTEGER NOT NULL,
+    until_ts INTEGER NOT NULL,
+    message_count INTEGER NOT NULL,
+    watermark_ts INTEGER,
+    watermark_id TEXT,
+    summary_id TEXT,
+    adapter TEXT NOT NULL,
+    model TEXT,
+    status TEXT NOT NULL,
+    error TEXT,
+    cost_usd REAL,
+    duration_ms INTEGER,
+    created_ts INTEGER NOT NULL,
+    PRIMARY KEY (tenant_id, id)
+  );
+  CREATE INDEX idx_runs_tenant_group ON runs (tenant_id, group_jid, created_ts);
+
+  CREATE TABLE deliveries (
+    tenant_id TEXT NOT NULL,
+    summary_id TEXT NOT NULL,
+    channel TEXT NOT NULL,
+    target TEXT,
+    text TEXT,
+    status TEXT NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    error TEXT,
+    created_ts INTEGER NOT NULL,
+    sent_ts INTEGER,
+    PRIMARY KEY (tenant_id, summary_id, channel)
+  );
+  CREATE INDEX idx_deliveries_tenant_status ON deliveries (tenant_id, status, created_ts);
+  `,
 ];
 
 export const MIGRATION_COUNT = MIGRATIONS.length;

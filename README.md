@@ -10,9 +10,10 @@ Self-hosted, all data stays on disk. Built tenant-keyed from the start: today
 it runs with a single tenant (`owner`), so it can grow into a bring-your-own-
 account service later without a rewrite (see `CLAUDE.md` and `docs/adr/`).
 
-> **Project status: phase 2 of 7 (summarize on demand).** The agent pairs,
-> ingests allow-listed groups into SQLite, and can summarize any stored window
-> with `digest summarize … --dry-run`. Summaries are printed only; no
+> **Project status: phase 3 of 7 (deliver).** The agent pairs, ingests
+> allow-listed groups into SQLite, summarizes any stored window on demand, and
+> delivers the result to your WhatsApp self-chat and a Markdown vault. No
+> scheduling yet, and no
 > outbound messages yet. See [Roadmap](#roadmap).
 
 ## Why
@@ -39,9 +40,9 @@ One Node/TypeScript process, split into modules with typed boundaries:
 | `src/listener/`  | Baileys socket, QR pairing, auth persistence, allow-listed ingestion   | ✅ done |
 | `src/store/`     | SQLite via better-sqlite3: groups, messages (edits, soft deletes)      | ✅ done |
 | `src/config/`    | zod-validated `config.yaml` + env, per-group overrides over defaults   | ✅ done |
-| `src/cli/`       | `digest run`, `digest groups`                                          | ✅ done |
-| `src/summarizer/`| Adapter interface; `fake` and `cli-claude` shipped, `cli-gemini`, `cli-codex`, `api-*` later | done    |
-| `src/delivery/`  | Idempotent fan-out: self-DM, Markdown vault, group post               | phase 3 |
+| `src/cli/`       | `digest run`, `digest groups`, `digest summarize`                      | ✅ done |
+| `src/summarizer/`| Adapter interface; `fake` and `cli-claude` shipped, `cli-gemini`, `cli-codex`, `api-*` later | ✅ done |
+| `src/delivery/`  | Idempotent fan-out: self-DM and Markdown vault shipped; group post in phase 5 | ✅ done |
 | `src/scheduler/` | Daily / weekly / threshold triggers with restart-safe watermarks       | phase 4 |
 
 Cross-module imports go through each module's `index.ts` only. Errors are
@@ -112,13 +113,32 @@ allow-listed groups are ever stored; everything else is dropped at the socket.
 | `pnpm digest run`    | Run the listener once, no reload                                     |
 | `pnpm digest groups` | List every group the account is in, with allow-list mark and counts  |
 
-| `pnpm digest summarize <group> --since 2d --dry-run` | Summarize one group's stored messages and print the result |
+| `pnpm digest summarize <group> --since 2d` | Summarize one group's stored messages and deliver to its channels |
+| `pnpm digest summarize <group> --since 2d --dry-run` | Same, but only print; nothing is delivered |
 
 `<group>` is a JID, the `name` from `config.yaml`, or the group subject as
 WhatsApp shows it. `--since` takes `30m`, `12h`, `2d`, `1w`, or an ISO date.
 Flags `--adapter`, `--style`, `--language`, `--max-words`, and `--tz` override
-the group's config for one run. Without `--dry-run` the command refuses to run
-until delivery lands in phase 3.
+the group's config for one run.
+
+A summary's identity is its window: the same group, start, and last message
+map to the same summary id. Re-running the same window reuses the stored text
+and retries only channels that have not been delivered, so the command is safe
+to repeat. Pass `--fresh` to regenerate. Every attempt is recorded in `runs`
+with the last message as a watermark.
+
+#### Delivery channels
+
+| Channel   | How it works                                                                          |
+| --------- | ------------------------------------------------------------------------------------- |
+| `vault`   | Written immediately as `<vault.dir>/<group-slug>/<date>-<id>.md` with YAML front matter |
+| `self_dm` | Queued in the database; the running listener (`digest run`) sends it to your own number with 2–5 s jitter and the daily cap |
+| `group`   | Not implemented yet (phase 5). Even with `deliver.group: true` nothing is posted.      |
+
+Because the self-DM goes through the listener's outbox, `digest summarize` does
+not need its own WhatsApp session and never conflicts with a running `digest
+run`. If the listener is not running, the message waits in the queue until it
+is. Sends are retried up to five times and then marked failed.
 
 #### Summarizer adapters
 
@@ -138,6 +158,7 @@ under `summarizers:` in `config.yaml`.
 | ------------- | --------------- | -------------------------------------------- |
 | `CONFIG_PATH` | `./config.yaml` | Path to the YAML config                      |
 | `DATA_DIR`    | `./data`        | SQLite DB (`digest.db`) and WhatsApp auth    |
+| `VAULT_DIR`   | `config.vault.dir` (`./vault`) | Where Markdown notes are written |
 | `LOG_LEVEL`   | `info`          | pino level: `trace` … `fatal`                |
 
 A `.env` in the working directory is loaded automatically if present.
@@ -187,23 +208,24 @@ data/                    # gitignored, never commit
 │   └── owner/
 │       └── auth/        # WhatsApp multi-device session (treat as a secret)
 └── digest.db            # SQLite, WAL mode; every table carries tenant_id
+vault/                   # Markdown notes (config vault.dir); gitignored
 ```
 
-Tables so far: `groups` (tenant, jid, subject, participant count, first/last
-seen) and `messages` (tenant, group, id, sender, timestamp, kind, body,
-`edited_ts`, soft `deleted` flag). Every query is scoped by `tenant_id`; the
-store has no method that reads across tenants. Schema changes are versioned
-migrations in `src/store/db.ts`; migration 002 moved existing rows under the
-`owner` tenant.
+Tables: `groups`, `messages` (per-group id, sender, timestamp, kind, body,
+`edited_ts`, soft `deleted` flag), `summaries` (stable id, window, watermark,
+text), `runs` (every attempt with status, cost, and watermark), and
+`deliveries` (one row per summary and channel: `queued`, `sent`, or `failed`).
+Every query is scoped by `tenant_id`; the store has no method that reads
+across tenants. Schema changes are versioned migrations in `src/store/db.ts`.
 
 Only one process may use a given tenant auth directory at a time. Never run
 the host and Docker profiles against the same directory.
 
 ## Operational behaviour
 
-- **Quiet observer.** No presence broadcast, no read receipts, no sends in
-  phase 1. Later phases route all sends through one queue with 2–5 s jitter and
-  a daily cap.
+- **Quiet observer.** No presence broadcast, no read receipts. The only sends
+  are self-DM digests, and they go through one per-tenant outbox with 2–5 s
+  jitter and a rolling 24-hour cap (`limits.max_sends_per_day`, default 30).
 - **Reconnects** use exponential backoff with jitter, capped at 60 s.
 - **Session state is explicit**: `connecting → pairing → connected`, with
   `reconnecting` and `logged_out` logged as transitions.
@@ -249,7 +271,7 @@ better-sqlite3, zod 4, pino, commander, vitest, biome.
 
 1. ✅ **Listen + store** — pair, ingest allow-listed groups, `digest groups`
 2. ✅ **Summarize on demand** — `fake` and `cli-claude` adapters, `--dry-run`
-3. **Deliver** to self-DM and Markdown vault with idempotent run records
+3. ✅ **Deliver** to self-DM and Markdown vault with idempotent run records
 4. **Scheduler** — daily / weekly / threshold cadences, restart-safe watermarks
 5. **Group posting** (opt-in) behind the send queue and rate limits
 6. **Docker profile** for a VPS, with CLI-auth mounting or API fallback

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { type NewMessage, Store } from './store.js';
+import { type NewMessage, type RunRecord, Store, type SummaryRecord, summaryId } from './store.js';
 
 const T = 'owner';
 
@@ -113,5 +113,152 @@ describe('Store', () => {
     store.applyEdit('acme', 'g1@g.us', 'B', 'edited', 5);
     expect(store.getMessage(T, 'g1@g.us', 'A')?.deleted).toBe(false);
     expect(store.getMessage(T, 'g1@g.us', 'B')).toBeUndefined();
+  });
+});
+
+describe('Store: summaries, runs, deliveries', () => {
+  let store: Store;
+  beforeEach(() => {
+    store = new Store(':memory:');
+  });
+
+  const summary = (overrides: Partial<SummaryRecord> = {}): SummaryRecord => ({
+    tenantId: T,
+    id: 'abc123',
+    groupJid: 'g1@g.us',
+    sinceTs: 100,
+    untilTs: 200,
+    watermarkTs: 190,
+    watermarkId: 'M9',
+    messageCount: 3,
+    adapter: 'fake',
+    model: null,
+    text: 'summary text',
+    createdTs: 200,
+    ...overrides,
+  });
+
+  it('derives a stable summary id from the first and last message', () => {
+    const b = {
+      tenantId: T,
+      groupJid: 'g1@g.us',
+      firstTs: 100,
+      firstId: 'M1',
+      lastTs: 190,
+      lastId: 'M9',
+    };
+    const a = summaryId(b);
+    expect(a).toBe(summaryId({ ...b }));
+    expect(a).toHaveLength(16);
+    expect(a).not.toBe(summaryId({ ...b, tenantId: 'acme' }));
+    expect(a).not.toBe(summaryId({ ...b, lastId: 'M10' }));
+    expect(a).not.toBe(summaryId({ ...b, firstId: 'M2', firstTs: 101 }));
+  });
+
+  it('upserts summaries, replacing text on conflict', () => {
+    store.upsertSummary(summary());
+    store.upsertSummary(summary({ text: 'regenerated', model: 'sonnet' }));
+    const got = store.getSummary(T, 'abc123');
+    expect(got?.text).toBe('regenerated');
+    expect(got?.model).toBe('sonnet');
+    expect(store.getSummary('acme', 'abc123')).toBeUndefined();
+  });
+
+  it('records runs and exposes the last delivered watermark', () => {
+    const run = (o: Partial<RunRecord>): RunRecord => ({
+      tenantId: T,
+      id: o.id ?? 'r',
+      groupJid: 'g1@g.us',
+      trigger: 'manual',
+      dryRun: false,
+      sinceTs: 0,
+      untilTs: 10,
+      messageCount: 1,
+      watermarkTs: 5,
+      watermarkId: 'A',
+      summaryId: 'abc123',
+      adapter: 'fake',
+      model: null,
+      status: 'ok',
+      error: null,
+      costUsd: 0,
+      durationMs: 1,
+      createdTs: 10,
+      ...o,
+    });
+    expect(store.lastWatermark(T, 'g1@g.us')).toBeUndefined();
+    store.insertRun(run({ id: 'r1', watermarkTs: 5, watermarkId: 'A' }));
+    store.insertRun(run({ id: 'r2', watermarkTs: 9, watermarkId: 'B', dryRun: true }));
+    store.insertRun(run({ id: 'r3', watermarkTs: 8, watermarkId: 'C', status: 'error' }));
+    store.insertRun(run({ id: 'r4', watermarkTs: 7, watermarkId: 'D' }));
+    expect(store.lastWatermark(T, 'g1@g.us')).toEqual({ watermarkTs: 7, watermarkId: 'D' });
+    expect(store.lastWatermark('acme', 'g1@g.us')).toBeUndefined();
+  });
+
+  it('tracks deliveries per channel with sent/failed transitions', () => {
+    store.putDelivery({
+      tenantId: T,
+      summaryId: 'abc123',
+      channel: 'self_dm',
+      status: 'queued',
+      text: 'hello',
+      createdTs: 1,
+    });
+    expect(store.queuedDeliveries(T).map((d) => d.channel)).toEqual(['self_dm']);
+    expect(store.queuedDeliveries('acme')).toEqual([]);
+
+    store.markDeliveryFailed(T, 'abc123', 'self_dm', 'boom', false);
+    let d = store.getDelivery(T, 'abc123', 'self_dm');
+    expect(d?.status).toBe('queued');
+    expect(d?.attempts).toBe(1);
+    expect(d?.error).toBe('boom');
+
+    store.markDeliverySent(T, 'abc123', 'self_dm', 'me@s.whatsapp.net', 50);
+    d = store.getDelivery(T, 'abc123', 'self_dm');
+    expect(d?.status).toBe('sent');
+    expect(d?.target).toBe('me@s.whatsapp.net');
+    expect(d?.sentTs).toBe(50);
+    expect(store.queuedDeliveries(T)).toEqual([]);
+
+    store.markDeliveryFailed(T, 'abc123', 'self_dm', 'perm', true);
+    expect(store.getDelivery(T, 'abc123', 'self_dm')?.status).toBe('failed');
+
+    // re-queue resets attempts and error
+    store.putDelivery({
+      tenantId: T,
+      summaryId: 'abc123',
+      channel: 'self_dm',
+      status: 'queued',
+      text: 'hello again',
+      createdTs: 60,
+    });
+    d = store.getDelivery(T, 'abc123', 'self_dm');
+    expect(d).toMatchObject({ status: 'queued', attempts: 0, error: null, text: 'hello again' });
+  });
+
+  it('counts WhatsApp sends in a window, ignoring vault rows and other tenants', () => {
+    const put = (tenantId: string, summaryId: string, channel: 'self_dm' | 'vault' | 'group') =>
+      store.putDelivery({
+        tenantId,
+        summaryId,
+        channel,
+        status: 'sent',
+        createdTs: 1,
+        sentTs: 100,
+      });
+    put(T, 's1', 'self_dm');
+    put(T, 's2', 'group');
+    put(T, 's3', 'vault');
+    put('acme', 's4', 'self_dm');
+    store.putDelivery({
+      tenantId: T,
+      summaryId: 's5',
+      channel: 'self_dm',
+      status: 'sent',
+      createdTs: 1,
+      sentTs: 10,
+    });
+    expect(store.countSentSince(T, 50)).toBe(2);
+    expect(store.countSentSince(T, 0)).toBe(3);
   });
 });

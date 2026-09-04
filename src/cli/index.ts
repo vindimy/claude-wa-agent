@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { join, resolve } from 'node:path';
 import { Command } from 'commander';
 import {
@@ -8,9 +9,10 @@ import {
   type ResolvedGroupConfig,
   resolveGroupConfig,
 } from '../config/index.js';
+import { type DeliveryOutcome, deliverSummary, startOutbox } from '../delivery/index.js';
 import { startListener } from '../listener/index.js';
 import { createLogger, migrateLegacyAuthDir, OWNER_TENANT_ID } from '../shared/index.js';
-import { Store } from '../store/index.js';
+import { Store, type SummaryRecord, summaryId } from '../store/index.js';
 import { ADAPTER_NAMES, createSummarizer, type SummarizerError } from '../summarizer/index.js';
 import { parseSince } from './since.js';
 
@@ -64,9 +66,16 @@ program
       'starting listener',
     );
     const listener = await startListener({ tenantId, config, store, dataDir });
+    const outbox = startOutbox({
+      tenantId,
+      store,
+      transport: listener,
+      maxSendsPerDay: config.limits.max_sends_per_day,
+    });
 
     const shutdown = async (signal: string) => {
       log.info({ signal }, 'shutting down');
+      outbox.stop();
       await listener.stop();
       store.close();
       process.exit(0);
@@ -141,12 +150,28 @@ function formatSummarizerError(e: SummarizerError): string {
   }
 }
 
+function formatOutcome(o: DeliveryOutcome): string {
+  switch (o.channel) {
+    case 'vault':
+      if (o.outcome === 'written') return `vault:    wrote ${o.path}`;
+      if (o.outcome === 'already')
+        return `vault:    already written${o.path ? ` (${o.path})` : ''}`;
+      return `vault:    FAILED — ${o.message}`;
+    case 'self_dm':
+      if (o.outcome === 'queued') return 'self-DM:  queued — the listener (`digest run`) sends it';
+      return o.status === 'sent' ? 'self-DM:  already sent' : 'self-DM:  already queued';
+    case 'group':
+      return `group:    skipped — ${o.reason}`;
+  }
+}
+
 program
   .command('summarize')
-  .description('summarize one group over a time window (phase 2: --dry-run only)')
+  .description('summarize one group over a time window and deliver it (or --dry-run)')
   .argument('<group>', 'group JID, configured name, or subject')
   .requiredOption('--since <window>', 'relative span (30m, 12h, 2d, 1w) or ISO date')
   .option('--dry-run', 'print the summary instead of delivering it')
+  .option('--fresh', 'regenerate even if this exact window was summarized before')
   .option('--adapter <name>', `summarizer adapter (${ADAPTER_NAMES.join(', ')})`)
   .option('--style <style>', 'topics | narrative | action-items')
   .option('--language <lang>', 'auto | ru | en')
@@ -158,6 +183,7 @@ program
       opts: {
         since: string;
         dryRun?: boolean;
+        fresh?: boolean;
         adapter?: string;
         style?: string;
         language?: string;
@@ -165,11 +191,8 @@ program
         tz?: string;
       },
     ) => {
-      if (!opts.dryRun) {
-        console.error('Delivery is not implemented yet (phase 3). Re-run with --dry-run.');
-        process.exit(2);
-      }
       const config = loadConfigOrExit();
+      const vaultDir = resolve(process.env.VAULT_DIR ?? config.vault.dir);
       const store = new Store(dbPath);
       try {
         const group = findGroup(config, store, groupRef);
@@ -217,45 +240,144 @@ program
         const cadenceTz = 'tz' in group.cadence ? group.cadence.tz : undefined;
         const tz = opts.tz ?? cadenceTz ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
 
-        log.info(
-          {
-            tenant_id: tenantId,
-            group: group.jid,
-            adapter: adapterName,
-            messages: messages.length,
-            since: opts.since,
-          },
-          'summarizing (dry run)',
-        );
-        const result = await summarizer.value.summarize({
+        // Identity = the message set, so a drifting relative --since still
+        // maps to the same summary while the same messages fall inside it.
+        const first = messages[0];
+        const last = messages[messages.length - 1];
+        if (!first || !last) return;
+        const sid = summaryId({
           tenantId,
           groupJid: group.jid,
-          groupName: group.name ?? group.jid,
-          messages,
-          sinceTs: since.value,
-          untilTs: nowTs,
-          tz,
-          options: summaryOptions,
+          firstTs: first.ts,
+          firstId: first.id,
+          lastTs: last.ts,
+          lastId: last.id,
         });
-        if (!result.ok) {
-          log.error({ error: result.error }, formatSummarizerError(result.error));
-          process.exit(1);
-        }
+        const groupName = group.name ?? group.jid;
+        const mode = opts.dryRun ? 'dry run' : 'deliver';
 
-        const s = result.value;
-        console.log(`\n${s.text}\n`);
-        log.info(
-          {
+        let summary = opts.fresh ? undefined : store.getSummary(tenantId, sid);
+        if (summary) {
+          log.info(
+            { tenant_id: tenantId, group: group.jid, summaryId: sid, mode },
+            'reusing stored summary for this window (pass --fresh to regenerate)',
+          );
+        } else {
+          log.info(
+            {
+              tenant_id: tenantId,
+              group: group.jid,
+              adapter: adapterName,
+              messages: messages.length,
+              since: opts.since,
+              mode,
+            },
+            'summarizing',
+          );
+          const result = await summarizer.value.summarize({
+            tenantId,
+            groupJid: group.jid,
+            groupName,
+            messages,
+            sinceTs: since.value,
+            untilTs: nowTs,
+            tz,
+            options: summaryOptions,
+          });
+          const createdTs = Math.floor(Date.now() / 1000);
+          if (!result.ok) {
+            store.insertRun({
+              tenantId,
+              id: randomUUID(),
+              groupJid: group.jid,
+              trigger: 'manual',
+              dryRun: Boolean(opts.dryRun),
+              sinceTs: since.value,
+              untilTs: nowTs,
+              messageCount: messages.length,
+              watermarkTs: last.ts,
+              watermarkId: last.id,
+              summaryId: null,
+              adapter: adapterName,
+              model: null,
+              status: 'error',
+              error: formatSummarizerError(result.error),
+              costUsd: null,
+              durationMs: null,
+              createdTs,
+            });
+            log.error({ error: result.error }, formatSummarizerError(result.error));
+            process.exit(1);
+          }
+          const s = result.value;
+          summary = {
+            tenantId,
+            id: sid,
+            groupJid: group.jid,
+            sinceTs: since.value,
+            untilTs: nowTs,
+            watermarkTs: last.ts,
+            watermarkId: last.id,
+            messageCount: messages.length,
             adapter: s.adapter,
             model: s.model,
-            messages: s.messageCount,
-            inputChars: s.inputChars,
-            words: s.text.split(/\s+/).length,
-            durationMs: s.durationMs,
+            text: s.text,
+            createdTs,
+          } satisfies SummaryRecord;
+          store.upsertSummary(summary);
+          store.insertRun({
+            tenantId,
+            id: randomUUID(),
+            groupJid: group.jid,
+            trigger: 'manual',
+            dryRun: Boolean(opts.dryRun),
+            sinceTs: since.value,
+            untilTs: nowTs,
+            messageCount: messages.length,
+            watermarkTs: last.ts,
+            watermarkId: last.id,
+            summaryId: sid,
+            adapter: s.adapter,
+            model: s.model,
+            status: 'ok',
+            error: null,
             costUsd: s.costUsd,
-          },
-          'dry run complete — nothing was delivered',
-        );
+            durationMs: s.durationMs,
+            createdTs,
+          });
+          log.info(
+            {
+              adapter: s.adapter,
+              model: s.model,
+              messages: s.messageCount,
+              inputChars: s.inputChars,
+              words: s.text.split(/\s+/).length,
+              durationMs: s.durationMs,
+              costUsd: s.costUsd,
+              summaryId: sid,
+            },
+            'summary generated and recorded',
+          );
+        }
+
+        console.log(`\n${summary.text}\n`);
+
+        if (opts.dryRun) {
+          console.log('(dry run — nothing delivered; the summary is stored and will be reused)');
+          return;
+        }
+
+        const outcomes = deliverSummary({
+          store,
+          summary,
+          deliver: group.deliver,
+          vaultDir,
+          render: { groupName, tz },
+          nowTs: Math.floor(Date.now() / 1000),
+          force: Boolean(opts.fresh),
+        });
+        for (const o of outcomes) console.log(formatOutcome(o));
+        if (outcomes.some((o) => o.outcome === 'error')) process.exit(1);
       } finally {
         store.close();
       }
