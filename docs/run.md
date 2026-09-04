@@ -491,23 +491,27 @@ beyond loopback or a tunnel.
 
 ## Summarizer adapters
 
-Five adapters exist today:
+Seven adapters exist today:
 
 | Adapter | Auth in Docker | Notes |
 | --- | --- | --- |
 | `cli-claude` | `CLAUDE_CODE_OAUTH_TOKEN` in `.env` | Default. Owner-only (ADR 0003) |
+| `cli-gemini` | `./data/home/.gemini/oauth_creds.json` + `GOOGLE_GENAI_USE_GCA=true` (or `GEMINI_API_KEY`) | Google-account login; no cost figure. Owner-only |
+| `cli-codex` | `./data/home/.codex/auth.json` (`codex login --device-auth` in the container) | ChatGPT-plan login; no cost figure. Owner-only |
 | `api-anthropic` | `ANTHROPIC_API_KEY` in `.env` | Default model `claude-opus-5`; `claude-sonnet-5` is about a fifth of the cost |
 | `api-openai` | `OPENAI_API_KEY` in `.env` | Default model `gpt-5.6-terra`; `gpt-5.6-luna` is about a tenth of the cost |
 | `api-google` | `GOOGLE_API_KEY` (or `GEMINI_API_KEY`) in `.env` | Default model `gemini-3.8-flash`; `gemini-3.1-pro-preview` for the larger model |
 | `fake` | none | Deterministic stats; for plumbing checks |
 
-All three API adapters run the same prompt, honour `summary.language`
-(English by default), `summary.personality`, and `summary.instructions`,
-respect `summary.max_words`, and write a cost estimate into
+All adapters run the same prompt, honour `summary.language` (English by
+default), `summary.personality`, and `summary.instructions`, and respect
+`summary.max_words`. The three API adapters write a cost estimate into
 `runs.cost_usd` from the vendor's published per-token prices (null for a
-model not in the table). The config loader rejects an unknown adapter name
-at the first run with `unknown summarizer "…" (available: fake, cli-claude,
-api-anthropic, api-openai, api-google)`.
+model not in the table); `cli-claude` records what the CLI reports;
+`cli-gemini` and `cli-codex` record null because subscription usage has no
+per-call price. The config loader rejects an unknown adapter name at the
+first run with `unknown summarizer "…" (available: fake, cli-claude,
+cli-gemini, cli-codex, api-anthropic, api-openai, api-google)`.
 
 ### Choosing an adapter per group
 

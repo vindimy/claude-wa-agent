@@ -6,6 +6,10 @@ export interface CliRunOptions {
   args: string[];
   stdin: string;
   timeoutMs: number;
+  /** Working directory for the child; defaults to the agent's own cwd. */
+  cwd?: string;
+  /** Extra environment variables layered over the agent's own. */
+  env?: Record<string, string>;
 }
 
 export interface CliRunOutput {
@@ -33,13 +37,17 @@ export function runCli(opts: CliRunOptions): Promise<Result<CliRunOutput, CliRun
   return new Promise((resolve) => {
     // Strip the nested-session markers so the adapter also works when the
     // agent itself was launched from inside a Claude Code session.
-    const env = { ...process.env };
+    const env = { ...process.env, ...opts.env };
     delete env.CLAUDECODE;
     delete env.CLAUDE_CODE_ENTRYPOINT;
 
     let child: ReturnType<typeof spawn>;
     try {
-      child = spawn(opts.bin, opts.args, { stdio: ['pipe', 'pipe', 'pipe'], env });
+      child = spawn(opts.bin, opts.args, {
+        stdio: ['pipe', 'pipe', 'pipe'],
+        env,
+        cwd: opts.cwd,
+      });
     } catch (e) {
       resolve(err({ tag: 'spawn', bin: opts.bin, message: String(e) }));
       return;

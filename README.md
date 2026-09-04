@@ -41,7 +41,7 @@ One Node/TypeScript process, split into modules with typed boundaries:
 | `src/store/`     | SQLite via better-sqlite3: groups, messages (edits, soft deletes)      | ✅ done |
 | `src/config/`    | zod-validated `config.yaml` + env, per-group overrides over defaults   | ✅ done |
 | `src/cli/`       | `digest run`, `digest groups`, `digest summarize`                      | ✅ done |
-| `src/summarizer/`| Adapter interface; `fake`, `cli-claude`, `api-anthropic`, `api-openai`, and `api-google` shipped, `cli-gemini`, `cli-codex` later | ✅ done |
+| `src/summarizer/`| Adapter interface; `fake`, `cli-claude`, `cli-gemini`, `cli-codex`, `api-anthropic`, `api-openai`, `api-google` | ✅ done |
 | `src/delivery/`  | Idempotent fan-out: self-DM, Markdown vault, and opt-in group post through one outbox | ✅ done |
 | `src/scheduler/` | Daily / weekly / threshold triggers, `/digest` commands, restart-safe watermarks | ✅ done |
 
@@ -239,6 +239,8 @@ treated as commands; history sync is ignored.
 | Adapter      | What it does                                                                    |
 | ------------ | ------------------------------------------------------------------------------- |
 | `cli-claude` | Spawns `claude -p` with the transcript on stdin: no tools, no session files, no settings pickup. Uses your existing CLI login. Owner-only. |
+| `cli-gemini` | Spawns `gemini -p` headless with JSON output: no extensions, read-only tools, the digest system prompt replaces the CLI's own via `GEMINI_SYSTEM_MD`, neutral cwd so no `GEMINI.md` leaks in. Uses your Google-account login (or `GEMINI_API_KEY`). Owner-only. |
+| `cli-codex`  | Spawns `codex exec --json` ephemeral and read-only, ignoring `~/.codex/config.toml` and `.rules`, prompt on stdin. Uses your ChatGPT login (`codex login`). Owner-only. |
 | `api-anthropic` | Calls the Anthropic Messages API with `ANTHROPIC_API_KEY`. Default model `claude-opus-5`; set `summarizers.api-anthropic.model` to `claude-sonnet-5` for a cheaper run. Server-side refusal fallbacks are on. |
 | `api-openai` | Calls the OpenAI Responses API with `OPENAI_API_KEY`. Default model `gpt-5.6-terra`; `gpt-5.6-luna` is about a tenth of the cost, `gpt-5.6-sol` the flagship. Responses are not stored on OpenAI's side. |
 | `api-google` | Calls the Gemini API with `GOOGLE_API_KEY` (or `GEMINI_API_KEY`). Default model `gemini-3.8-flash`; `gemini-3.1-pro-preview` for the larger model. Thinking tokens are billed as output and counted in the cost estimate. |
@@ -294,8 +296,9 @@ default) or behind an SSH tunnel: `ssh -L 8787:127.0.0.1:8787 vps`.
 | `VAULT_DIR`   | `config.vault.dir` (`./vault`) | Where Markdown notes are written |
 | `LOG_LEVEL`   | `info`          | pino level: `trace` … `fatal`                |
 | `LOG_DIR`     | unset (Docker: `/app/data/logs`) | Also write rolling JSON log files: `app.*` (all) and `errors.*` (warn+) |
-| `SUMMARIZER`  | from config     | Force one adapter for every group (`api-anthropic`, `api-openai`, `api-google`, `cli-claude`, `fake`) |
+| `SUMMARIZER`  | from config     | Force one adapter for every group (`cli-claude`, `cli-gemini`, `cli-codex`, `api-anthropic`, `api-openai`, `api-google`, `fake`) |
 | `CLAUDE_CODE_OAUTH_TOKEN` | unset | Headless login for `cli-claude`, from `claude setup-token`. Owner-only. |
+| `GOOGLE_GENAI_USE_GCA` | unset | `true` makes `cli-gemini` use the Google-account login in `~/.gemini/oauth_creds.json` (Docker: `./data/home/.gemini/`). Owner-only. |
 | `ANTHROPIC_API_KEY` | unset     | Key for `api-anthropic`                       |
 | `OPENAI_API_KEY` | unset        | Key for `api-openai`                          |
 | `GOOGLE_API_KEY` | unset        | Key for `api-google` (`GEMINI_API_KEY` also works) |
@@ -312,7 +315,7 @@ override any of `summarizer`, `cadence`, `deliver`, or `summary`.
 
 ```yaml
 defaults:
-  summarizer: cli-claude        # fake | cli-claude | api-anthropic | api-openai | api-google
+  summarizer: cli-claude        # fake | cli-claude | cli-gemini | cli-codex | api-anthropic | api-openai | api-google
   cadence: { type: daily, at: "08:00", tz: "America/Los_Angeles" }
   deliver: { self_dm: true, group: false, vault: true }
   summary:
@@ -402,14 +405,15 @@ agent is built to behave like a human who is simply present in the group.
 Two profiles run the same code:
 
 - **host** (Mac mini, primary): `pnpm build` then run `node dist/cli/index.js run`
-  under pm2 or launchd. The `claude` CLI is already logged in, so `cli-claude`
-  works as-is.
+  under pm2 or launchd. The `claude`, `gemini`, and `codex` CLIs are already
+  logged in, so the `cli-*` adapters work as-is.
 - **docker** (VPS, also the future service profile): `docker compose up -d`
   pulls `ghcr.io/vindimy/claude-wa-agent` and mounts `./data`, `./vault`, and
-  `config.yaml`. The image installs the `claude` CLI; authenticate it with
-  `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token`, or set
-  `SUMMARIZER=api-anthropic` plus `ANTHROPIC_API_KEY` to skip the CLI
-  entirely. CI builds amd64 and arm64 images on every push to `main` and
+  `config.yaml`. The image installs the `claude`, `gemini`, and `codex`
+  CLIs; authenticate `claude` with `CLAUDE_CODE_OAUTH_TOKEN` from
+  `claude setup-token`, the other two through credentials in `./data/home/`,
+  or set `SUMMARIZER=api-anthropic` plus `ANTHROPIC_API_KEY` to skip the
+  CLIs entirely. CI builds amd64 and arm64 images on every push to `main` and
   tags them by version on `v*` tags.
 
 Never run both profiles against the same `data/` directory. Step-by-step
@@ -455,7 +459,7 @@ better-sqlite3, zod 4, pino, commander, vitest, biome.
 4. ✅ **Scheduler** — daily / weekly / threshold cadences, `/digest`, restart-safe watermarks
 5. ✅ **Group posting** (opt-in) behind the send queue and rate limits
 6. ✅ **Docker profile** for a VPS, with headless CLI auth or the `api-anthropic` fallback
-7. ✅ **OpenAI and Gemini adapters** — `api-openai` and `api-google`, mixable per group
+7. ✅ **OpenAI and Gemini adapters** — `api-openai` and `api-google`, then `cli-gemini` and `cli-codex`, mixable per group
 8. ✅ **Q&A and dashboard** — `/ask <group> <question>` over stored history, read-only local web dashboard
 9. Nice-to-have: action-item extraction as its own output
 

@@ -3,12 +3,16 @@ import { createApiAnthropicSummarizer } from './api-anthropic.js';
 import { createApiGoogleSummarizer } from './api-google.js';
 import { createApiOpenAiSummarizer } from './api-openai.js';
 import { createClaudeCliSummarizer } from './cli-claude.js';
+import { createCodexCliSummarizer } from './cli-codex.js';
+import { createGeminiCliSummarizer } from './cli-gemini.js';
 import { createFakeSummarizer } from './fake.js';
 import type { AdapterOptions, Summarizer } from './types.js';
 
 const FACTORIES: Record<string, (opts: AdapterOptions) => Summarizer> = {
   fake: () => createFakeSummarizer(),
   'cli-claude': createClaudeCliSummarizer,
+  'cli-gemini': createGeminiCliSummarizer,
+  'cli-codex': createCodexCliSummarizer,
   'api-anthropic': (opts) => createApiAnthropicSummarizer(opts),
   'api-openai': (opts) => createApiOpenAiSummarizer(opts),
   'api-google': (opts) => createApiGoogleSummarizer(opts),

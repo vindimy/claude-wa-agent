@@ -7,9 +7,11 @@
 # Run:         docker compose up -d
 #
 # Summarizer auth inside the container, pick one (see docs/deploy.md):
-#   CLAUDE_CODE_OAUTH_TOKEN=...   from `claude setup-token` on any logged-in machine
-#   SUMMARIZER=api-anthropic + ANTHROPIC_API_KEY=...   API-key fallback
-#   (or SUMMARIZER=api-openai + OPENAI_API_KEY, SUMMARIZER=api-google + GOOGLE_API_KEY)
+#   cli-claude:  CLAUDE_CODE_OAUTH_TOKEN=...   from `claude setup-token` on any logged-in machine
+#   cli-gemini:  ./data/home/.gemini/oauth_creds.json + GOOGLE_GENAI_USE_GCA=true
+#   cli-codex:   ./data/home/.codex/auth.json  (`codex login --device-auth` in the container)
+#   api-*:       SUMMARIZER=api-anthropic + ANTHROPIC_API_KEY=...   API-key fallback
+#                (or SUMMARIZER=api-openai + OPENAI_API_KEY, SUMMARIZER=api-google + GOOGLE_API_KEY)
 
 ARG NODE_VERSION=22
 
@@ -38,8 +40,10 @@ ENV NODE_ENV=production \
     LOG_DIR=/app/data/logs \
     HOME=/app/data/home
 WORKDIR /app
-# The owner's CLI adapter runs `claude -p` inside the container.
-RUN npm install -g @anthropic-ai/claude-code \
+# The owner's CLI adapters run `claude -p`, `gemini -p`, and `codex exec`
+# inside the container. Their credentials live under $HOME, which is in the
+# data volume (see docker-entrypoint.sh and docs/deploy.md).
+RUN npm install -g @anthropic-ai/claude-code @google/gemini-cli @openai/codex \
  && npm cache clean --force
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist

@@ -40,3 +40,22 @@ to bind-mount `~/.claude` read-only into the container.
   setting.
 - A future service tenant uses `api-*` adapters with their own key; the token
   path never applies to them.
+
+## Addendum (2026-09-04): `cli-gemini` and `cli-codex`
+
+The image also installs `@google/gemini-cli` and `@openai/codex`. Neither has
+a `setup-token` equivalent, and both keep their login in plain files
+(`~/.gemini/oauth_creds.json`, `~/.codex/auth.json`) on every platform, so
+the Keychain argument above does not apply to them.
+
+- The container's `HOME` is `/app/data/home`, inside the data volume. The
+  credential files live there (`./data/home/.gemini/`, `./data/home/.codex/`
+  on the VPS), written either by the CLI's own headless login run inside the
+  container (`codex login --device-auth`, `NO_BROWSER=true gemini`) or copied
+  from a logged-in machine. Nothing from the host's home is mounted.
+- `GOOGLE_GENAI_USE_GCA=true` in `.env` selects the Google-account login for
+  `gemini` without shipping a `settings.json`, whose MCP servers would
+  otherwise load into every call.
+- Both stay owner-only per ADR 0003. The `api-google` and `api-openai`
+  adapters remain the path for anyone else, and the simpler choice whenever
+  the credential at hand is an API key rather than a subscription login.

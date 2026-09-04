@@ -1,3 +1,5 @@
+import { realpathSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { describe, expect, it } from 'vitest';
 import { runCli } from './run-cli.js';
 
@@ -44,6 +46,23 @@ describe('runCli', () => {
     });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error.tag).toBe('timeout');
+  });
+
+  it('passes cwd and extra env to the child', async () => {
+    const r = await runCli({
+      bin: node,
+      args: ['-e', 'process.stdout.write(process.cwd() + "|" + process.env.DIGEST_TEST_VAR)'],
+      stdin: '',
+      timeoutMs: 10_000,
+      cwd: tmpdir(),
+      env: { DIGEST_TEST_VAR: 'set' },
+    });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      const [cwd, v] = r.value.stdout.split('|');
+      expect(realpathSync(cwd ?? '')).toBe(realpathSync(tmpdir()));
+      expect(v).toBe('set');
+    }
   });
 
   it('reports a missing binary as a spawn error', async () => {

@@ -218,7 +218,9 @@ host and docker profiles simultaneously against the same
    same `Summarizer` interface, keyed by `OPENAI_API_KEY` / `GOOGLE_API_KEY`,
    configured under `summarizers:` and selectable per group via
    `summarizer:` like the existing adapters. Tracked in GitHub issue #1.
-   *(shipped)*
+   Followed by `cli-gemini` (`gemini -p`) and `cli-codex` (`codex exec`),
+   owner-only like `cli-claude`; headless auth per adapter is in
+   `docs/deploy.md`. *(shipped)*
 8. **Q&A and dashboard**: `/ask <group> <question>` and `digest ask` over
    stored history via the adapters' `complete()`; read-only local web
    dashboard (`src/dashboard/`). *(shipped, see `docs/adr/0005-*`)*

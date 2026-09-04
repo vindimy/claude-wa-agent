@@ -6,13 +6,16 @@ given `data/tenants/<tenant>/auth/` at a time**: a second linked instance
 kicks the first off the session.
 
 This page covers first-time setup. Once it runs, [run.md](run.md) is the
-day-to-day reference.
+day-to-day reference. Summarizer login for every adapter, on both profiles,
+is in [Summarizer adapters: initialization](#summarizer-adapters-initialization)
+at the end.
 
 | | host (Mac mini) | docker (VPS) |
 | --- | --- | --- |
 | Process manager | pm2 or launchd | `docker compose`, `restart: unless-stopped` |
-| `claude` CLI auth | already logged in on the machine | `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token` |
-| API fallback | `SUMMARIZER=api-anthropic` + `ANTHROPIC_API_KEY` (or `api-openai` + `OPENAI_API_KEY`, `api-google` + `GOOGLE_API_KEY`) | same |
+| CLI adapters (`cli-claude`, `cli-gemini`, `cli-codex`) | the CLIs are already logged in on the machine | `claude`: `CLAUDE_CODE_OAUTH_TOKEN`; `gemini` and `codex`: credential files under `./data/home/` |
+| API adapters (`api-anthropic`, `api-openai`, `api-google`) | key in `.env` | same |
+| Force one adapter everywhere | `SUMMARIZER=<name>` in `.env` | same |
 | Time zone | the OS | `TZ` in `.env`; cadences with an explicit `tz` ignore it |
 
 ## Host profile (pm2)
@@ -25,6 +28,11 @@ node dist/cli/index.js run      # first run prints the QR; scan, wait for "conne
 pm2 start "node dist/cli/index.js run" --name wa-digest --time
 pm2 save && pm2 startup         # print the launchd/systemd line and run it
 ```
+
+Before the first scheduled run, log the summarizer in: see
+[Summarizer adapters: initialization](#summarizer-adapters-initialization).
+On the host that usually means the CLI you already use is logged in and
+nothing else is needed.
 
 `pnpm dev` (tsx with hot reload) is for development only. Do not leave it
 running alongside pm2: it is a second linked instance.
@@ -51,8 +59,11 @@ it with `DIGEST_IMAGE_TAG=0.2.0` in `.env`; leave it unset to track `latest`.
 git clone git@github.com:vindimy/claude-wa-agent.git && cd claude-wa-agent
 cp config.example.yaml config.yaml && $EDITOR config.yaml
 cp .env.example .env && $EDITOR .env
-mkdir -p data vault
+mkdir -p data/home vault
 ```
+
+`data/home` is the container's `HOME`: the CLI adapters keep their
+credentials there (step 2).
 
 In `.env` set `PUID`/`PGID` to your uid and gid (`id -u`, `id -g`) so the
 container writes `data/` and `vault/` as you, and `TZ` to the zone you think
@@ -70,24 +81,16 @@ settings if you would rather skip the login.
 
 ### 2. Pick how the summarizer authenticates
 
-**Option A, owner's Claude subscription (headless CLI).** On any machine where
-`claude` is logged in:
+`config.yaml` names an adapter per group (`defaults.summarizer`, or
+`summarizer:` on a group). Each adapter has its own login; do the one(s)
+you use from [Summarizer adapters: initialization](#summarizer-adapters-initialization),
+Docker column. The two common shapes:
 
-```bash
-claude setup-token
-```
+**Owner's Claude subscription (headless CLI).** On any machine where
+`claude` is logged in run `claude setup-token` and put the token in `.env`
+as `CLAUDE_CODE_OAUTH_TOKEN=...`. Nothing from `~/.claude` is mounted.
 
-Copy the token into `.env` as `CLAUDE_CODE_OAUTH_TOKEN=...`. The container's
-`claude -p` uses it; nothing from `~/.claude` needs to be mounted. This is the
-owner-only path (see ADR 0003): keep the token out of git and off any other
-tenant's config.
-
-Why not bind-mount `~/.claude`? On macOS the CLI keeps credentials in the
-Keychain, so the directory carries no login. On Linux the file exists but is
-tied to that machine's install and rotates. The token is portable and
-revocable, which is what a container wants.
-
-**Option B, API key.** Put in `.env`:
+**API key.** In `.env`:
 
 ```
 SUMMARIZER=api-anthropic
@@ -95,12 +98,10 @@ ANTHROPIC_API_KEY=sk-ant-...
 ```
 
 `SUMMARIZER` forces the adapter for every group, so `config.yaml` can stay
-identical between profiles. The default model is `claude-opus-5`; set
-`summarizers.api-anthropic.model: claude-sonnet-5` in `config.yaml` for about
-a fifth of the cost per digest.
+identical between profiles. Leave it unset to keep per-group choice.
 
-Option A can also be used on the host and option B in Docker, or the other
-way round. Nothing else changes.
+One profile can use a CLI and the other an API key, or the other way
+round. Nothing else changes.
 
 ### 3. Pull and pair
 
@@ -164,7 +165,18 @@ because auth lives in the volume; migrations run on startup.
   purpose. Fix: stop everything, delete `data/tenants/owner/auth/`, pair again.
 - **`Not logged in` from `cli-claude` in Docker.** The token is missing or
   expired. Regenerate with `claude setup-token` and restart. Or switch to
-  option B for the night: `SUMMARIZER=api-anthropic` in `.env`.
+  an API key for the night: `SUMMARIZER=api-anthropic` in `.env`.
+- **`Please set an Auth method … GEMINI_API_KEY, GOOGLE_GENAI_USE_VERTEXAI,
+  GOOGLE_GENAI_USE_GCA` from `cli-gemini`.** The CLI found no login. In
+  Docker: `./data/home/.gemini/oauth_creds.json` is missing or
+  `GOOGLE_GENAI_USE_GCA=true` is not in `.env`. On the host: run `gemini`
+  once and log in.
+- **`cli-codex` exits with an auth or `401` message.** `./data/home/.codex/auth.json`
+  is missing or the refresh token was revoked. Run `codex login --device-auth`
+  again (see below) or `codex login status` on the host.
+- **`Approval mode overridden to "default" because the current folder is not
+  trusted` in `cli-gemini` stderr.** Expected: the adapter runs in an empty
+  temporary directory on purpose. Not an error.
 - **`EACCES` writing `data/` or `vault/`.** `PUID`/`PGID` in `.env` do not
   match the owner of the bind mounts. Set them to `id -u` / `id -g`.
 - **`denied` on `docker compose pull`.** The package is private and you are
@@ -174,3 +186,168 @@ because auth lives in the volume; migrations run on startup.
 - **`better-sqlite3` fails to load after an upgrade.** The prebuilt binary
   did not match the Node version. Rebuild with the build overlay and
   `--no-cache`; the build stage has the toolchain to compile it.
+
+## Summarizer adapters: initialization
+
+Seven adapters, one login each. The CLI adapters (`cli-*`) ride on the
+owner's subscriptions and are owner-only (ADR 0003); anyone else uses the
+API adapters. Every adapter reads only its own credential, so several can be
+configured at once and mixed per group.
+
+Verify any adapter without sending anything:
+
+```bash
+# host
+pnpm digest summarize "Family" --since 2d --dry-run --adapter cli-gemini
+# docker
+docker compose run --rm digest summarize "Family" --since 2d --dry-run --adapter cli-codex
+```
+
+The run logs `invoking <cli>` or the API call, then prints the summary. An
+auth problem shows up here as a `model` error with the CLI's own message.
+
+### `cli-claude` (default)
+
+Spawns `claude -p`. Needs the `claude` binary and a login.
+
+- **Host.** `npm i -g @anthropic-ai/claude-code`, then `claude` and `/login`
+  once. Already done on the Mac mini.
+- **Docker.** The image has the binary. On any logged-in machine:
+
+  ```bash
+  claude setup-token
+  ```
+
+  Put the printed token in `.env` as `CLAUDE_CODE_OAUTH_TOKEN=...` and
+  `docker compose up -d`. Why a token and not a mount of `~/.claude`: on
+  macOS the directory holds no credentials (they live in the Keychain), and
+  a token is portable and revocable (ADR 0004).
+- **Options.** `summarizers.cli-claude.model` (alias like `sonnet` or a full
+  id), `timeout_seconds`, `bin`.
+
+### `cli-gemini`
+
+Spawns `gemini -p` headless with JSON output, extensions off, tools
+read-only, the digest system prompt in place of the CLI's coding prompt, and
+an empty temporary directory as cwd. Needs the `gemini` binary and a login.
+
+- **Host.** `npm i -g @google/gemini-cli` (or `brew install gemini-cli`),
+  then run `gemini` once and pick **Login with Google**; a browser opens.
+  The login lands in `~/.gemini/oauth_creds.json`. Check with:
+
+  ```bash
+  echo "Reply with OK" | gemini -p "" -o json
+  ```
+
+  Google Workspace accounts also need `GOOGLE_CLOUD_PROJECT=<project id>` in
+  the environment.
+- **Docker, Google account.** Two ways to get the credential file into
+  `./data/home/.gemini/`:
+
+  1. Log in from inside the container. `NO_BROWSER=true` makes the CLI
+     print a URL to open elsewhere and ask for the code back:
+
+     ```bash
+     docker compose run --rm -e NO_BROWSER=true --entrypoint gemini digest
+     ```
+
+     Pick **Login with Google**, follow the URL, paste the code, then `/quit`.
+  2. Copy it from a logged-in machine:
+
+     ```bash
+     mkdir -p data/home/.gemini
+     scp mac-mini:~/.gemini/oauth_creds.json data/home/.gemini/
+     ```
+
+  Either way, add to `.env`:
+
+  ```
+  GOOGLE_GENAI_USE_GCA=true
+  ```
+
+  This tells the CLI to use the Google-account login without a
+  `settings.json` in the container; do not copy your own `settings.json`,
+  its MCP servers would load into every summary call. Workspace accounts
+  add `GOOGLE_CLOUD_PROJECT=...`.
+- **Docker, API key.** `GEMINI_API_KEY=...` in `.env` also works for the
+  CLI, but then `api-google` is the better adapter: same key, no CLI
+  overhead, and a cost figure in `runs.cost_usd`.
+- **Options.** `summarizers.cli-gemini.model` (omit for the CLI's default),
+  `timeout_seconds`, `bin`. Cost is recorded as null.
+
+### `cli-codex`
+
+Spawns `codex exec --json` ephemeral, read-only, ignoring
+`~/.codex/config.toml` and `.rules`, with the prompt on stdin and an empty
+temporary directory as cwd. Needs the `codex` binary and a login.
+
+- **Host.** `npm i -g @openai/codex`, then `codex login` (browser) and
+  confirm with `codex login status`. The login lands in `~/.codex/auth.json`.
+- **Docker, ChatGPT plan.** Log in from inside the container with the device
+  flow, which needs no browser on the VPS:
+
+  ```bash
+  docker compose run --rm --entrypoint codex digest login --device-auth
+  ```
+
+  Open the printed URL on any device, enter the code, done. The credential
+  is now in `./data/home/.codex/auth.json`; nothing goes in `.env`. Or copy
+  that file from a logged-in machine:
+
+  ```bash
+  mkdir -p data/home/.codex
+  scp mac-mini:~/.codex/auth.json data/home/.codex/
+  ```
+
+  Check with `docker compose run --rm --entrypoint codex digest login status`.
+- **Docker, API key.** `printenv OPENAI_API_KEY | codex login --with-api-key`
+  works, but then `api-openai` is the better adapter for the same reasons as
+  above.
+- **Options.** `summarizers.cli-codex.model` (omit for the CLI's default),
+  `timeout_seconds`, `bin`. The event stream does not name the model, so
+  `runs.model` is the configured value or null; cost is recorded as null.
+
+### `api-anthropic`
+
+Calls the Anthropic Messages API directly.
+
+- **Both profiles.** `ANTHROPIC_API_KEY=sk-ant-...` in `.env`. Optionally
+  `SUMMARIZER=api-anthropic` to force it for every group.
+- **Options.** `summarizers.api-anthropic.model` (default `claude-opus-5`;
+  `claude-sonnet-5` is about a fifth of the cost), `timeout_seconds`.
+
+### `api-openai`
+
+Calls the OpenAI Responses API directly. Responses are not stored on
+OpenAI's side.
+
+- **Both profiles.** `OPENAI_API_KEY=sk-...` in `.env`. Optionally
+  `SUMMARIZER=api-openai`.
+- **Options.** `summarizers.api-openai.model` (default `gpt-5.6-terra`;
+  `gpt-5.6-luna` is about a tenth of the cost), `timeout_seconds`.
+
+### `api-google`
+
+Calls the Gemini API directly.
+
+- **Both profiles.** `GOOGLE_API_KEY=...` (or `GEMINI_API_KEY=...`) in
+  `.env`. Optionally `SUMMARIZER=api-google`.
+- **Options.** `summarizers.api-google.model` (default `gemini-3.8-flash`;
+  `gemini-3.1-pro-preview` for the larger model), `timeout_seconds`.
+
+### `fake`
+
+No credential. Deterministic stats-only output for plumbing checks:
+`--adapter fake` on a dry run, or `SUMMARIZER=fake` to exercise delivery
+without paying anyone.
+
+### Switching adapters
+
+Resolution order, most specific wins: `--adapter` on a command, then
+`SUMMARIZER` in `.env`, then `summarizer:` on the group, then
+`defaults.summarizer`. `config.yaml` is read once at startup, so after an
+edit run `pm2 restart wa-digest` on the host or
+`docker compose up -d --force-recreate digest` in Docker (a plain restart
+does not remount a rewritten file, see [run.md](run.md#group-configuration)).
+`SUMMARIZER` and `--adapter` need no config change. The new adapter is used
+from the next run.
