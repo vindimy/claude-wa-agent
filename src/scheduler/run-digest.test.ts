@@ -34,6 +34,9 @@ function setup(configRaw: Record<string, unknown>) {
         costUsd: 0,
       });
     },
+    async complete() {
+      return ok({ text: 'answer', model: null, durationMs: 1, costUsd: 0 });
+    },
   };
   const base = {
     tenantId: 'owner',

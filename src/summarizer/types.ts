@@ -40,9 +40,39 @@ export type SummarizerError =
   | { tag: 'parse'; message: string; raw: string }
   | { tag: 'model'; message: string };
 
+/** What a `complete()` call is for; adapters use it in logs and error text. */
+export type CompletionPurpose = 'summary' | 'answer';
+
+/** One system+user prompt to send to the model, with routing context for logs. */
+export interface CompletionRequest {
+  tenantId: string;
+  groupJid: string;
+  system: string;
+  user: string;
+  purpose: CompletionPurpose;
+}
+
+export interface Completion {
+  text: string;
+  model: string | null;
+  durationMs: number;
+  costUsd: number | null;
+}
+
+/**
+ * A model backend. `summarize` is the digest path (fixed prompt, `Summary`
+ * shape); `complete` sends any prompt the caller built, which is how `/ask`
+ * reuses the same adapters and credentials.
+ */
 export interface Summarizer {
   readonly name: string;
   summarize(input: SummaryInput): Promise<Result<Summary, SummarizerError>>;
+  complete(req: CompletionRequest): Promise<Result<Completion, SummarizerError>>;
+}
+
+/** Verb for "the model declined to …" messages. */
+export function purposeVerb(purpose: CompletionPurpose): string {
+  return purpose === 'answer' ? 'answer this question' : 'summarize this transcript';
 }
 
 /** Per-adapter settings from `summarizers.<name>` in config.yaml. */

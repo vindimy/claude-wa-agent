@@ -186,3 +186,62 @@ describe('classifyError', () => {
     expect(classifyError(new Error('x'), 1)).toEqual({ tag: 'model', message: 'x' });
   });
 });
+
+describe('api-anthropic complete()', () => {
+  it('sends the given system and user text and returns the completion', async () => {
+    const seen: Array<{ system: unknown; user: unknown }> = [];
+    const s = createApiAnthropicSummarizer(
+      { model: 'claude-sonnet-5' },
+      {
+        create: async (params) => {
+          seen.push({ system: params.system, user: params.messages[0]?.content });
+          return response({ model: 'claude-sonnet-5' });
+        },
+      },
+    );
+    const r = await s.complete({
+      tenantId: 'owner',
+      groupJid: 'g@g.us',
+      system: 'ANSWER SYS',
+      user: 'Question: who?',
+      purpose: 'answer',
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.value).toMatchObject({
+      text: 'Summary text',
+      model: 'claude-sonnet-5',
+      costUsd: 0.025,
+    });
+    expect(seen).toEqual([{ system: 'ANSWER SYS', user: 'Question: who?' }]);
+  });
+
+  it('words a refusal for the purpose of the call', async () => {
+    const s = createApiAnthropicSummarizer(
+      {},
+      {
+        create: async () =>
+          response({
+            stop_reason: 'refusal',
+            stop_details: {
+              type: 'refusal',
+              category: 'general_harms',
+              explanation: null,
+              fallback_credit_token: null,
+              fallback_has_prefill_claim: false,
+              recommended_model: null,
+            } as unknown as Anthropic.Beta.Messages.BetaRefusalStopDetails,
+            content: [],
+          }),
+      },
+    );
+    const r = await s.complete({
+      tenantId: 'owner',
+      groupJid: 'g@g.us',
+      system: 'S',
+      user: 'U',
+      purpose: 'answer',
+    });
+    expect(!r.ok && r.error.tag === 'model' && r.error.message).toContain('declined to answer');
+  });
+});

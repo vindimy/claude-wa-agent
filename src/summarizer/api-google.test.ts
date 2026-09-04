@@ -279,3 +279,29 @@ describe('classifyGoogleError', () => {
     });
   });
 });
+
+describe('api-google complete()', () => {
+  it('sends the given system and user text and returns the completion', async () => {
+    const seen: Array<{ system: unknown; contents: unknown }> = [];
+    const s = createApiGoogleSummarizer(
+      { model: 'gemini-3.8-flash' },
+      {
+        generate: async (params) => {
+          seen.push({ system: params.config?.systemInstruction, contents: params.contents });
+          return response();
+        },
+      },
+    );
+    const r = await s.complete({
+      tenantId: 'owner',
+      groupJid: 'g@g.us',
+      system: 'ANSWER SYS',
+      user: 'Question: who?',
+      purpose: 'answer',
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.value.text).toBe('Summary text');
+    expect(seen).toEqual([{ system: 'ANSWER SYS', contents: 'Question: who?' }]);
+  });
+});

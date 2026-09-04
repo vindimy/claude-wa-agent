@@ -46,3 +46,25 @@ describe('fake summarizer', () => {
     if (!r.ok) expect(r.error.tag).toBe('empty');
   });
 });
+
+describe('fake summarizer complete()', () => {
+  it('answers deterministically from the prompt and echoes the question', async () => {
+    const s = createFakeSummarizer();
+    const req = {
+      tenantId: 'owner',
+      groupJid: 'g@g.us',
+      system: 'SYS',
+      user: 'Group: Team\nQuestion: Who owns the deck?\n\nTranscript:\n10:00 Lena: hi',
+      purpose: 'answer' as const,
+    };
+    const a = await s.complete(req);
+    const b = await s.complete(req);
+    expect(a.ok && b.ok).toBe(true);
+    if (!a.ok || !b.ok) return;
+    expect(a.value.text).toBe(b.value.text);
+    expect(a.value.text).toContain('[fake answer]');
+    expect(a.value.text).toContain('Who owns the deck?');
+    expect(a.value.model).toBeNull();
+    expect(a.value.costUsd).toBe(0);
+  });
+});

@@ -1,7 +1,7 @@
 import { createLogger, err, ok, type Result } from '../shared/index.js';
-import { buildPrompt } from './prompt.js';
 import { runCli } from './run-cli.js';
-import type { AdapterOptions, Summarizer, SummarizerError, SummaryInput } from './types.js';
+import { summarizeVia } from './summarize-via.js';
+import type { AdapterOptions, Summarizer, SummarizerError } from './types.js';
 
 const log = createLogger('summarizer:cli-claude');
 
@@ -83,43 +83,42 @@ export function claudeArgs(system: string, model: string | undefined): string[] 
 export function createClaudeCliSummarizer(opts: AdapterOptions = {}): Summarizer {
   const bin = opts.bin ?? DEFAULT_BIN;
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+
+  const complete: Summarizer['complete'] = async (req) => {
+    log.info(
+      {
+        tenant_id: req.tenantId,
+        group: req.groupJid,
+        purpose: req.purpose,
+        chars: req.user.length,
+        bin,
+      },
+      'invoking claude',
+    );
+    log.debug({ system: req.system, user: req.user }, 'prompt');
+
+    const run = await runCli({
+      bin,
+      args: claudeArgs(req.system, opts.model),
+      stdin: req.user,
+      timeoutMs,
+    });
+    if (!run.ok) return run;
+    log.debug({ stderr: run.value.stderr }, 'claude stderr');
+
+    const parsed = parseClaudeOutput(run.value.stdout);
+    if (!parsed.ok) return parsed;
+    return ok({
+      text: parsed.value.text,
+      model: parsed.value.model,
+      durationMs: run.value.durationMs,
+      costUsd: parsed.value.costUsd,
+    });
+  };
+
   return {
     name: 'cli-claude',
-    async summarize(input: SummaryInput) {
-      if (input.messages.length === 0) return err({ tag: 'empty' as const });
-      const prompt = buildPrompt(input);
-      log.info(
-        {
-          tenant_id: input.tenantId,
-          group: input.groupJid,
-          messages: input.messages.length,
-          chars: prompt.user.length,
-          bin,
-        },
-        'invoking claude',
-      );
-      log.debug({ system: prompt.system, user: prompt.user }, 'prompt');
-
-      const run = await runCli({
-        bin,
-        args: claudeArgs(prompt.system, opts.model),
-        stdin: prompt.user,
-        timeoutMs,
-      });
-      if (!run.ok) return run;
-      log.debug({ stderr: run.value.stderr }, 'claude stderr');
-
-      const parsed = parseClaudeOutput(run.value.stdout);
-      if (!parsed.ok) return parsed;
-      return ok({
-        text: parsed.value.text,
-        adapter: 'cli-claude',
-        model: parsed.value.model,
-        messageCount: input.messages.length,
-        inputChars: prompt.user.length,
-        durationMs: run.value.durationMs,
-        costUsd: parsed.value.costUsd,
-      });
-    },
+    summarize: (input) => summarizeVia('cli-claude', input, complete),
+    complete,
   };
 }

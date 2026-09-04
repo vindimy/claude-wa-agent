@@ -245,3 +245,29 @@ describe('classifyOpenAiError', () => {
     expect(classifyOpenAiError(new Error('x'), 1)).toEqual({ tag: 'model', message: 'x' });
   });
 });
+
+describe('api-openai complete()', () => {
+  it('sends the given system and user text and returns the completion', async () => {
+    const seen: Array<{ instructions: unknown; input: unknown }> = [];
+    const s = createApiOpenAiSummarizer(
+      { model: 'gpt-5.6-terra' },
+      {
+        create: async (params) => {
+          seen.push({ instructions: params.instructions, input: params.input });
+          return response({ model: 'gpt-5.6-terra' });
+        },
+      },
+    );
+    const r = await s.complete({
+      tenantId: 'owner',
+      groupJid: 'g@g.us',
+      system: 'ANSWER SYS',
+      user: 'Question: who?',
+      purpose: 'answer',
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.value).toMatchObject({ text: 'Summary text', model: 'gpt-5.6-terra' });
+    expect(seen).toEqual([{ instructions: 'ANSWER SYS', input: 'Question: who?' }]);
+  });
+});

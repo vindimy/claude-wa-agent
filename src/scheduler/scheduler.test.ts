@@ -308,6 +308,10 @@ describe('runDigest', () => {
             ok: false,
             error: { tag: 'timeout', bin: 'claude', timeoutMs: 1 },
           }),
+          complete: async () => ({
+            ok: false,
+            error: { tag: 'timeout', bin: 'claude', timeoutMs: 1 },
+          }),
         },
       }),
     });

@@ -149,3 +149,17 @@ describe.skipIf(!process.env.INTEGRATION)('cli-claude adapter (INTEGRATION=1)', 
     expect(text).toMatch(/11:30|48|Sept(ember)? 15|Sasha|Саша/);
   }, 240_000);
 });
+
+describe('cli-claude complete()', () => {
+  it('surfaces a missing binary as a spawn error', async () => {
+    const s = createClaudeCliSummarizer({ bin: '/nonexistent/claude' });
+    const r = await s.complete({
+      tenantId: 'owner',
+      groupJid: 'g@g.us',
+      system: 'SYS',
+      user: 'Question: hi',
+      purpose: 'answer',
+    });
+    expect(!r.ok && r.error.tag).toBe('spawn');
+  });
+});

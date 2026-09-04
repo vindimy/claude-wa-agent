@@ -5,8 +5,13 @@ import {
   GoogleGenAI,
 } from '@google/genai';
 import { createLogger, err, ok } from '../shared/index.js';
-import { buildPrompt } from './prompt.js';
-import type { AdapterOptions, Summarizer, SummarizerError, SummaryInput } from './types.js';
+import { summarizeVia } from './summarize-via.js';
+import {
+  type AdapterOptions,
+  purposeVerb,
+  type Summarizer,
+  type SummarizerError,
+} from './types.js';
 
 const log = createLogger('summarizer:api-google');
 
@@ -93,89 +98,87 @@ export function createApiGoogleSummarizer(
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   let generate = deps.generate;
 
+  const complete: Summarizer['complete'] = async (req) => {
+    log.info(
+      {
+        tenant_id: req.tenantId,
+        group: req.groupJid,
+        purpose: req.purpose,
+        chars: req.user.length,
+        model,
+      },
+      'calling the Gemini API',
+    );
+    log.debug({ system: req.system, user: req.user }, 'prompt');
+
+    if (!generate) {
+      const apiKey = deps.apiKey ?? process.env.GOOGLE_API_KEY ?? process.env.GEMINI_API_KEY;
+      if (!apiKey) {
+        return err({
+          tag: 'model' as const,
+          message: 'no Gemini API key (set GOOGLE_API_KEY or GEMINI_API_KEY)',
+        });
+      }
+      try {
+        const client = new GoogleGenAI({ apiKey, httpOptions: { timeout: timeoutMs } });
+        generate = (params) => client.models.generateContent(params);
+      } catch (e) {
+        return err({ tag: 'model' as const, message: describeError(e) });
+      }
+    }
+
+    const started = Date.now();
+    let response: GenerateContentResponse;
+    try {
+      response = await generate(googleRequest(req.system, req.user, model, timeoutMs));
+    } catch (e) {
+      return err(classifyGoogleError(e, timeoutMs));
+    }
+    const durationMs = Date.now() - started;
+
+    const blocked = response.promptFeedback?.blockReason;
+    if (blocked) {
+      return err({
+        tag: 'model' as const,
+        message: `Gemini blocked the transcript (${blocked})`,
+      });
+    }
+    const candidate = response.candidates?.[0];
+    const finish = candidate?.finishReason;
+    if (finish && finish !== 'STOP' && finish !== 'MAX_TOKENS') {
+      return err({
+        tag: 'model' as const,
+        message: `the model declined to ${purposeVerb(req.purpose)} (${finish})`,
+      });
+    }
+    const text = (candidate?.content?.parts ?? [])
+      .filter((p) => !p.thought && typeof p.text === 'string')
+      .map((p) => p.text)
+      .join('\n')
+      .trim();
+    if (!text) return err({ tag: 'model' as const, message: 'the API returned no text' });
+    if (finish === 'MAX_TOKENS') {
+      log.warn(
+        { model, maxOutputTokens: MAX_OUTPUT_TOKENS },
+        'response hit maxOutputTokens; it may be cut off',
+      );
+    }
+
+    const usedModel = response.modelVersion ?? model;
+    return ok({
+      text,
+      model: usedModel,
+      durationMs,
+      costUsd: response.usageMetadata
+        ? estimateGoogleCostUsd(usedModel, response.usageMetadata)
+        : null,
+    });
+  };
+
   return {
     name: 'api-google',
-    async summarize(input: SummaryInput) {
-      if (input.messages.length === 0) return err({ tag: 'empty' as const });
-      const prompt = buildPrompt(input);
-      log.info(
-        {
-          tenant_id: input.tenantId,
-          group: input.groupJid,
-          messages: input.messages.length,
-          chars: prompt.user.length,
-          model,
-        },
-        'calling the Gemini API',
-      );
-      log.debug({ system: prompt.system, user: prompt.user }, 'prompt');
-
-      if (!generate) {
-        const apiKey = deps.apiKey ?? process.env.GOOGLE_API_KEY ?? process.env.GEMINI_API_KEY;
-        if (!apiKey) {
-          return err({
-            tag: 'model' as const,
-            message: 'no Gemini API key (set GOOGLE_API_KEY or GEMINI_API_KEY)',
-          });
-        }
-        try {
-          const client = new GoogleGenAI({ apiKey, httpOptions: { timeout: timeoutMs } });
-          generate = (params) => client.models.generateContent(params);
-        } catch (e) {
-          return err({ tag: 'model' as const, message: describeError(e) });
-        }
-      }
-
-      const started = Date.now();
-      let response: GenerateContentResponse;
-      try {
-        response = await generate(googleRequest(prompt.system, prompt.user, model, timeoutMs));
-      } catch (e) {
-        return err(classifyGoogleError(e, timeoutMs));
-      }
-      const durationMs = Date.now() - started;
-
-      const blocked = response.promptFeedback?.blockReason;
-      if (blocked) {
-        return err({
-          tag: 'model' as const,
-          message: `Gemini blocked the transcript (${blocked})`,
-        });
-      }
-      const candidate = response.candidates?.[0];
-      const finish = candidate?.finishReason;
-      if (finish && finish !== 'STOP' && finish !== 'MAX_TOKENS') {
-        return err({
-          tag: 'model' as const,
-          message: `the model declined to summarize this transcript (${finish})`,
-        });
-      }
-      const text = (candidate?.content?.parts ?? [])
-        .filter((p) => !p.thought && typeof p.text === 'string')
-        .map((p) => p.text)
-        .join('\n')
-        .trim();
-      if (!text) return err({ tag: 'model' as const, message: 'the API returned no text' });
-      if (finish === 'MAX_TOKENS') {
-        log.warn(
-          { model, maxOutputTokens: MAX_OUTPUT_TOKENS },
-          'summary hit maxOutputTokens; it may be cut off',
-        );
-      }
-
-      const usedModel = response.modelVersion ?? model;
-      return ok({
-        text,
-        adapter: 'api-google',
-        model: usedModel,
-        messageCount: input.messages.length,
-        inputChars: prompt.user.length,
-        durationMs,
-        costUsd: response.usageMetadata
-          ? estimateGoogleCostUsd(usedModel, response.usageMetadata)
-          : null,
-      });
-    },
+    summarize: (input) => summarizeVia('api-google', input, complete),
+    complete,
   };
 }
 

@@ -1,6 +1,6 @@
 import { err, ok } from '../shared/index.js';
 import { displayName, formatDay, formatTranscript } from './prompt.js';
-import type { Summarizer, SummaryInput } from './types.js';
+import type { CompletionRequest, Summarizer, SummaryInput } from './types.js';
 
 /**
  * Deterministic adapter with no external calls. Used in tests and for
@@ -43,6 +43,16 @@ export function createFakeSummarizer(): Summarizer {
         messageCount: input.messages.length,
         inputChars: formatTranscript(input.messages, input.tz).length,
         durationMs: Date.now() - started,
+        costUsd: 0,
+      });
+    },
+    async complete(req: CompletionRequest) {
+      const question = /^Question: (.*)$/m.exec(req.user)?.[1] ?? '(no question)';
+      const transcriptLines = req.user.split('Transcript:\n')[1]?.split('\n').length ?? 0;
+      return ok({
+        text: `[fake answer] ${question}\n- Based on ${transcriptLines} transcript lines; no real model was called.`,
+        model: null,
+        durationMs: 0,
         costUsd: 0,
       });
     },
