@@ -150,6 +150,9 @@ describe('scheduler', () => {
     const queued = store.queuedDeliveries('owner');
     expect(queued).toHaveLength(1);
     expect(queued[0]?.text).toContain('🤖 Digest: Family');
+    // Stamped from the scheduler's clock, not Date.now(): the reply below
+    // shares that clock and must sort after this row.
+    expect(queued[0]?.createdTs).toBe(NOW);
     expect(store.recentRuns('owner', G2, 0)[0]?.trigger).toBe('command');
 
     await s.handleCommand('/digest Nope');

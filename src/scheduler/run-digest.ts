@@ -34,6 +34,8 @@ export interface DigestRequest {
    * caller asks otherwise (`digest summarize --post`).
    */
   postToGroup?: boolean;
+  /** Clock in ms; defaults to Date.now(). The scheduler passes its own. */
+  now?: () => number;
   /** Test seam. */
   summarizerFactory?: (
     name: string,
@@ -72,6 +74,7 @@ export type DigestError =
  */
 export async function runDigest(req: DigestRequest): Promise<Result<DigestResult, DigestError>> {
   const { tenantId, store, config, group, sinceTs, untilTs, trigger, tz, vaultDir } = req;
+  const now = req.now ?? Date.now;
   const log = createLogger('digest', { tenant_id: tenantId });
   const dryRun = Boolean(req.dryRun);
   const groupName = group.name ?? group.jid;
@@ -123,7 +126,7 @@ export async function runDigest(req: DigestRequest): Promise<Result<DigestResult
       tz,
       options,
     });
-    const createdTs = Math.floor(Date.now() / 1000);
+    const createdTs = Math.floor(now() / 1000);
     const runBase = {
       tenantId,
       id: randomUUID(),
@@ -202,7 +205,7 @@ export async function runDigest(req: DigestRequest): Promise<Result<DigestResult
     deliver,
     vaultDir,
     render: { groupName, tz },
-    nowTs: Math.floor(Date.now() / 1000),
+    nowTs: Math.floor(now() / 1000),
     force: Boolean(req.fresh),
   });
   if (group.deliver.group && !postToGroup) {

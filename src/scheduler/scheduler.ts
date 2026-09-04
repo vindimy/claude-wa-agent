@@ -89,6 +89,7 @@ export function startScheduler(opts: SchedulerOptions): SchedulerHandle {
       trigger,
       tz: groupTz,
       vaultDir,
+      now,
       summarizerFactory: opts.summarizerFactory,
       ...extra,
     });
