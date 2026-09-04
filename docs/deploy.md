@@ -5,6 +5,9 @@ Two profiles, one codebase. Both read the same `config.yaml`, keep state in
 given `data/tenants/<tenant>/auth/` at a time**: a second linked instance
 kicks the first off the session.
 
+This page covers first-time setup. Once it runs, [run.md](run.md) is the
+day-to-day reference.
+
 | | host (Mac mini) | docker (VPS) |
 | --- | --- | --- |
 | Process manager | pm2 or launchd | `docker compose`, `restart: unless-stopped` |

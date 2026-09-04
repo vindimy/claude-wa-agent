@@ -341,7 +341,9 @@ Two profiles run the same code:
 
 Never run both profiles against the same `data/` directory. Step-by-step
 instructions, pairing inside the container, and the failure modes we know
-about are in [`docs/deploy.md`](docs/deploy.md).
+about are in [`docs/deploy.md`](docs/deploy.md). Day-2 operations (start,
+stop, upgrade, log search, editing groups, commands, fetching past
+summaries) are in [`docs/run.md`](docs/run.md).
 
 ## Development
 
@@ -380,7 +382,8 @@ better-sqlite3, zod 4, pino, commander, vitest, biome.
 4. ✅ **Scheduler** — daily / weekly / threshold cadences, `/digest`, restart-safe watermarks
 5. ✅ **Group posting** (opt-in) behind the send queue and rate limits
 6. ✅ **Docker profile** for a VPS, with headless CLI auth or the `api-anthropic` fallback
-7. Nice-to-have: action items, `/ask <group> <question>`, local dashboard
+7. **OpenAI and Gemini adapters** — `api-openai` and `api-google`, mixable per group
+8. Nice-to-have: action items, `/ask <group> <question>`, local dashboard
 
 Design decisions are recorded in `docs/adr/`.
 

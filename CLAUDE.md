@@ -187,7 +187,11 @@ host and docker profiles simultaneously against the same
    `--post` is given. *(shipped)*
 6. **Docker profile** on the VPS (doubles as the service profile); headless
    CLI auth via token or the `api-anthropic` fallback via env. *(shipped)*
-7. Nice-to-have: action-item extraction, `/ask <group> <question>` over stored
+7. **OpenAI and Gemini adapters**: `api-openai` and `api-google` behind the
+   same `Summarizer` interface, keyed by `OPENAI_API_KEY` / `GOOGLE_API_KEY`,
+   configured under `summarizers:` and selectable per group via
+   `summarizer:` like the existing adapters. Tracked in GitHub issue #1.
+8. Nice-to-have: action-item extraction, `/ask <group> <question>` over stored
    history, simple local web dashboard.
 
 ## Service direction (multi-tenant, BYO account)
