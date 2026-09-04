@@ -1,0 +1,29 @@
+# Copy to config.yaml and edit. config.yaml is gitignored.
+#
+# Only groups listed under `groups:` are ingested. Everything else is ignored.
+# Find group JIDs by running `pnpm digest run` once (paired) and then
+# `pnpm digest groups` — it lists every group the account participates in.
+
+defaults:
+  summarizer: cli-claude
+  cadence: { type: daily, at: "08:00", tz: "America/Los_Angeles" }
+  deliver: { self_dm: true, group: false, vault: true }
+  summary:
+    language: auto          # auto | ru | en
+    style: topics           # topics | narrative | action-items
+    max_words: 300
+
+limits:
+  max_sends_per_day: 30
+
+ingest:
+  media: false
+
+groups:
+  - jid: "120363000000000001@g.us"
+    name: "Example group"
+    cadence: { type: threshold, messages: 150, max_hours: 24 }
+  - jid: "120363000000000002@g.us"
+    name: "Family"
+    cadence: { type: weekly, day: sun, at: "18:00" }
+    summary: { language: ru }
