@@ -128,7 +128,7 @@ docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
 
 ```bash
 docker compose up -d
-docker compose logs -f digest
+docker compose logs -f digest           # or: tail -f data/logs/errors.*.log
 docker compose exec digest node dist/cli/index.js groups
 docker compose exec digest node dist/cli/index.js schedule
 docker compose exec digest node dist/cli/index.js summarize "Family" --since 2d --dry-run

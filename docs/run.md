@@ -80,9 +80,32 @@ is `git pull && pnpm install && pnpm build && pm2 restart wa-digest`.
 
 ## Logs
 
-Logs go to stdout as one JSON object per line (pino). Docker keeps them in
-five rotating 10 MB files, so about 50 MB of history is available at any
-time.
+Logs go to stdout as one JSON object per line (pino). Docker keeps that
+stream in five rotating 10 MB files, so about 50 MB is available through
+`docker compose logs` at any time.
+
+The container also writes the same lines to files under `data/logs/` on the
+host (`LOG_DIR`, set to `/app/data/logs` in the image), which is the place to
+look when scrolling the console is painful:
+
+| File | Contents |
+| --- | --- |
+| `data/logs/app.<date>.<n>.log` | Everything at `LOG_LEVEL` and above |
+| `data/logs/errors.<date>.<n>.log` | Only `warn`, `error`, and `fatal` |
+
+Both roll over daily or at 20 MB, whichever comes first, and the newest 30
+files of each are kept; older ones are deleted by the agent. The files are
+plain JSON lines, so everything below that uses `docker compose logs
+--no-log-prefix` also works with `cat data/logs/app.*.log`:
+
+```bash
+tail -f data/logs/errors.$(date +%F).*.log          # watch for problems only
+cat data/logs/errors.*.log | jq -r '"\(.time/1000 | todate) \(.module) \(.msg)"'
+```
+
+Set `LOG_DIR=` (empty) in `.env` to turn the files off. On the host profile
+the variable is unset by default because pm2 already keeps `~/.pm2/logs/`;
+set it there too if you want the separate error file.
 
 ```bash
 docker compose logs -f digest                      # follow
@@ -151,10 +174,21 @@ deleted message id and the summarizer prompt. **Debug lines contain message
 bodies.** Switch back to `info` when done; the log files are on disk in
 plain text.
 
-The raw files, if you need them outside Docker:
+Docker's own copy of the stream, if you need it outside `data/logs/`:
 
 ```bash
 docker inspect --format='{{.LogPath}}' wa-digest
+```
+
+### Analysis across days
+
+The rolled files are a small dataset. DuckDB reads them all at once:
+
+```sql
+select module, msg, count(*) as n
+from read_json_auto('data/logs/app.*.log')
+where level >= 40
+group by 1, 2 order by n desc;
 ```
 
 ## Group configuration

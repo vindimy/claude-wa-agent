@@ -241,6 +241,7 @@ environment forces one adapter for every group without editing the file.
 | `DATA_DIR`    | `./data`        | SQLite DB (`digest.db`) and WhatsApp auth    |
 | `VAULT_DIR`   | `config.vault.dir` (`./vault`) | Where Markdown notes are written |
 | `LOG_LEVEL`   | `info`          | pino level: `trace` … `fatal`                |
+| `LOG_DIR`     | unset (Docker: `/app/data/logs`) | Also write rolling JSON log files: `app.*` (all) and `errors.*` (warn+) |
 | `SUMMARIZER`  | from config     | Force one adapter for every group (`api-anthropic`, `api-openai`, `api-google`, `cli-claude`, `fake`) |
 | `CLAUDE_CODE_OAUTH_TOKEN` | unset | Headless login for `cli-claude`, from `claude setup-token`. Owner-only. |
 | `ANTHROPIC_API_KEY` | unset     | Key for `api-anthropic`                       |

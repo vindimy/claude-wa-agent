@@ -142,6 +142,10 @@ host and docker profiles simultaneously against the same
 - Session state (`pairing`, `connected`, `reconnecting`, `phone_offline`,
   `logged_out`) is explicit and surfaced, not inferred from log noise.
 - Every log line carries `tenant_id`.
+- Logs are JSON lines on stdout. With `LOG_DIR` set (the Docker image uses
+  `/app/data/logs`) the same lines also go to rolling files: `app.*` with
+  everything and `errors.*` with warn and above, so problems can be read
+  without scrolling the console.
 - Media is not downloaded by default (`ingest.media: false`). Captions are stored.
 - Messages older than `retention.days` (30 by default; 60/90/180 allowed) are
   deleted hourly. Summaries, runs, and vault notes are never pruned.

@@ -35,6 +35,7 @@ ENV NODE_ENV=production \
     VAULT_DIR=/app/vault \
     CONFIG_PATH=/app/config.yaml \
     LOG_LEVEL=info \
+    LOG_DIR=/app/data/logs \
     HOME=/app/data/home
 WORKDIR /app
 # The owner's CLI adapter runs `claude -p` inside the container.
