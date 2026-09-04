@@ -54,8 +54,10 @@ src/
   summarizer/   adapter interface + implementations (cli-claude, cli-gemini,
                 cli-codex, api-anthropic, api-openai, api-google)
   delivery/     self-dm, group-post, markdown-vault
+  dashboard/    read-only local web page + JSON endpoints (node:http, no deps)
   config/       zod-validated config loading (config.yaml + env)
-  cli/          `digest run`, `digest summarize <group> --since`, `digest groups`
+  cli/          `digest run`, `digest summarize <group> --since`, `digest groups`,
+                `digest ask <group> <question>`, `digest dashboard`, `digest schedule`
 ```
 
 Data flow: `listener → store → scheduler decides → summarizer (adapter) →
@@ -74,10 +76,12 @@ delivery (fan-out) → store records the run`.
   queue item; auth state under `data/tenants/<tenant_id>/`. The single-user
   path uses the same code with one tenant (`tenant_id = "owner"`), so this is
   not dead scaffolding.
-- **Summarizer as adapter**: `interface Summarizer { summarize(input): Promise<Summary> }`.
+- **Summarizer as adapter**: `interface Summarizer { summarize(input); complete(req) }`.
   CLI adapters spawn the binary in non-interactive mode (e.g. `claude -p`,
   `gemini -p`, `codex exec`) with the prompt on stdin, parse stdout. API adapters
-  call the vendor SDK. Both return the same `Summary` shape.
+  call the vendor SDK. Both return the same `Summary` shape. `complete` sends
+  any system+user prompt through the same backend; `summarize` is the digest
+  prompt on top of it, and `/ask` is the question prompt on top of it.
 - **Scheduler is stateful**: every run is recorded with the message-id
   watermark, so a restart never double-summarizes or skips a window.
 - **Delivery is idempotent**: a summary has a stable id; each channel records
@@ -123,6 +127,14 @@ guard that tone never alters facts; unknown names fail config validation.
 Cadence types: `daily`, `weekly`, `threshold` (N messages or M hours, whichever
 first), `manual` (on-demand only). On-demand trigger for any group: the tenant
 sends `/digest` or `/digest 3d` from their own number in their self-chat.
+`/ask <group> [window] <question>` answers from stored messages (whole
+retention window by default); answers are self-DM only, recorded in
+`questions`, and never move a watermark.
+
+`dashboard: { enabled: false, host: 127.0.0.1, port: 8787 }` serves a
+read-only page and `/api/*` JSON from inside `digest run` (env
+`DASHBOARD_PORT` / `DASHBOARD_HOST` override). No auth, so loopback only;
+the page can never send, summarize, or change config.
 
 ## Deployment profiles
 
@@ -207,8 +219,10 @@ host and docker profiles simultaneously against the same
    configured under `summarizers:` and selectable per group via
    `summarizer:` like the existing adapters. Tracked in GitHub issue #1.
    *(shipped)*
-8. Nice-to-have: action-item extraction, `/ask <group> <question>` over stored
-   history, simple local web dashboard.
+8. **Q&A and dashboard**: `/ask <group> <question>` and `digest ask` over
+   stored history via the adapters' `complete()`; read-only local web
+   dashboard (`src/dashboard/`). *(shipped, see `docs/adr/0005-*`)*
+9. Nice-to-have: action-item extraction as its own output.
 
 ## Service direction (multi-tenant, BYO account)
 

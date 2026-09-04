@@ -358,6 +358,8 @@ container is up:
 | `/digest 3d` | Every group over the last 3 days |
 | `/digest Family` | One group since its last digest |
 | `/digest "Zouk team" 12h` | One group, explicit window (`30m`, `12h`, `2d`, `1w`, or an ISO date) |
+| `/ask Family when is the dacha trip?` | Answer from everything stored for the group |
+| `/ask Family 2w who is bringing the cake?` | Same, from the last two weeks only |
 | `/help` | The command list and the configured groups |
 
 The group can be its JID, its configured `name` (case-insensitive), or any
@@ -369,6 +371,8 @@ group. Only messages you type live count; history sync is ignored.
 
 Each `/digest` reply is also written to the vault and recorded as a run
 with trigger `command`, so it advances the watermark like a scheduled run.
+An `/ask` reply is only a self-DM; it is recorded under `questions` and
+leaves the watermark alone.
 
 ### From the shell
 
@@ -380,6 +384,9 @@ digest summarize "Family" --since 12h --style action-items --language en --max-w
 digest summarize "Family" --since 2d --personality butler --instructions "Skip the memes." --dry-run --fresh
 digest summarize "Family" --since 2d --adapter api-anthropic
 digest summarize "Dance planning" --since 1w --post     # also post into the group (needs deliver.group: true)
+digest ask "Family" "when is the dacha trip?"           # answer from everything stored for the group
+digest ask "Family" --since 2w "who is bringing the cake?"
+digest ask "Family" --adapter api-anthropic "что решили про дачу?"   # answers in the question's language
 ```
 
 `<group>` accepts a JID, the configured name, or the WhatsApp subject.
@@ -437,15 +444,50 @@ running.
 
 ### Asking the agent questions
 
-Not available yet. Today the agent only produces digests; there is no
-`/ask <group> <question>` over stored history. The nearest substitute is a
-dry run with a narrower style and window:
+`/ask <group> [window] <question>` in the self-chat and `digest ask <group>
+[--since <window>] "<question>"` in the shell answer from the messages stored
+for that group: the whole retention window (30 days by default) unless a
+window narrows it. Both use the group's summarizer, voice, and
+`instructions`, so context you wrote for digests ("Baba is grandma") helps
+here too. The model is told to use only the transcript and to say plainly
+when the answer is not in it; treat a confident answer to a question the
+chat never discussed as a bug and report it.
+
+Cost scales with the window: a month of a busy group is tens of thousands
+of tokens per question. Narrow the window when you can. Every question is
+recorded with its cost:
 
 ```bash
-digest summarize "Family" --since 3d --style action-items --dry-run
+sqlite3 -readonly -header -column data/digest.db "
+  SELECT datetime(created_ts,'unixepoch') AS at, group_jid, status, round(cost_usd,4) AS usd,
+         message_count AS msgs, substr(question,1,50) AS q
+  FROM questions ORDER BY created_ts DESC LIMIT 20;"
 ```
 
-Q&A over history is on the roadmap (see the README).
+Answers never post into a group and never move a digest watermark.
+
+## Dashboard
+
+A read-only web page with the session state, today's send budget, each
+group's schedule and backlog with two weeks of activity, recent runs,
+summaries and where they went, questions, and the outbox. It refreshes every
+30 s and needs nothing from the internet.
+
+Two ways to run it:
+
+- **Inside the listener.** Set `dashboard.enabled: true` in `config.yaml`
+  (or `DASHBOARD_PORT=8787` in `.env`) and recreate the container. In Docker
+  also uncomment the `ports:` lines in `docker-compose.yml`; they publish the
+  port on the VPS loopback only. Open it through an SSH tunnel:
+  `ssh -L 8787:127.0.0.1:8787 vps`, then `http://127.0.0.1:8787`.
+- **From a shell, without touching the listener.** `digest dashboard
+  --port 8787` (or `docker compose exec digest node dist/cli/index.js
+  dashboard`) reads the same database. The session state shows as
+  "not available" because only the listener process knows it.
+
+There is no login. Nothing on the page can send, summarize, or change
+config, but it does show summary and answer text, so never expose the port
+beyond loopback or a tunnel.
 
 ## Summarizer adapters
 

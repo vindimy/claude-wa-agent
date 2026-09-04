@@ -140,6 +140,8 @@ allow-listed groups are ever stored; everything else is dropped at the socket.
 | `pnpm digest summarize <group> --since 2d --dry-run` | Same, but only print; nothing is delivered |
 | `pnpm digest summarize <group> --since 2d --post` | Same, and also post into the group if it has `deliver.group: true` |
 | `pnpm digest schedule` | Show each group's cadence, last run, watermark, and whether it is due now |
+| `pnpm digest ask <group> "<question>" [--since 1w]` | Answer a question from the group's stored messages; printed, never sent |
+| `pnpm digest dashboard [--port 8787]` | Serve the read-only web dashboard from this shell |
 
 `<group>` is a JID, the `name` from `config.yaml`, or the group subject as
 WhatsApp shows it. `--since` takes `30m`, `12h`, `2d`, `1w`, or an ISO date.
@@ -152,6 +154,18 @@ map to the same summary id. Re-running the same window reuses the stored text
 and retries only channels that have not been delivered, so the command is safe
 to repeat. Pass `--fresh` to regenerate. Every attempt is recorded in `runs`
 with the last message as a watermark.
+
+#### Asking questions
+
+`digest ask` and the `/ask` self-chat command answer a question from the
+messages stored for one group. The whole retention window is used unless
+`--since` (or a window token after the group name) narrows it. The model is
+told to use only the transcript, to say plainly when the answer is not there,
+and to reply in the language of the question; the group's `personality` and
+`instructions` apply, so context like "Baba is grandma" carries over. Every
+question is recorded in `questions` with cost and status. Answers are private:
+printed by the CLI or queued as a self-DM, never posted into a group, and they
+never move a digest watermark.
 
 #### Delivery channels
 
@@ -211,11 +225,13 @@ Send these to yourself (the "You" chat in WhatsApp) while `digest run` is up:
 /digest 3d              every group over the last 3 days
 /digest Family          one group since its last digest
 /digest "Zouk team" 12h one group, explicit window
+/ask Family when is the dacha trip?      answer from everything stored
+/ask Family 2w who is bringing the cake? answer from the last two weeks
 /help                   list commands and groups
 ```
 
 Replies always come back as a self-DM, even for groups with `self_dm: false`,
-and a `/digest` never posts into the group. Only live messages you send are
+and neither `/digest` nor `/ask` ever posts into the group. Only live messages you send are
 treated as commands; history sync is ignored.
 
 #### Summarizer adapters
@@ -253,6 +269,22 @@ never changes, omits, or exaggerates a fact. `digest summarize --personality
 <name> --instructions "<text>" --dry-run --fresh` previews a voice on real
 messages (`--fresh` because a stored summary for the same window is reused).
 
+### Dashboard
+
+A read-only page for "is it healthy, is anything stuck, what did it cost".
+It shows the session state, the send budget for the day, every configured
+group with its schedule, stored message count, activity over the last two
+weeks and whether a digest is due, then recent runs, summaries with their
+delivery status, questions, and the outbox. It refreshes itself every 30 s.
+
+Off by default. Turn it on with `dashboard.enabled: true` in `config.yaml`
+or `DASHBOARD_PORT=8787` in the environment, restart `digest run`, and open
+`http://127.0.0.1:8787`. `digest dashboard` serves the same page from any
+shell against the shared database without restarting the listener; the
+session state then reads "not available". There is no login and nothing on
+the page can send, summarize, or change config, so keep it on loopback (the
+default) or behind an SSH tunnel: `ssh -L 8787:127.0.0.1:8787 vps`.
+
 ### Environment
 
 | Variable      | Default         | Purpose                                      |
@@ -268,6 +300,8 @@ messages (`--fresh` because a stored summary for the same window is reused).
 | `OPENAI_API_KEY` | unset        | Key for `api-openai`                          |
 | `GOOGLE_API_KEY` | unset        | Key for `api-google` (`GEMINI_API_KEY` also works) |
 | `TZ`          | system          | Fallback time zone for cadences without `tz` (set it in Docker) |
+| `DASHBOARD_PORT` | unset        | Turns the dashboard on and sets its port (overrides `dashboard.port`) |
+| `DASHBOARD_HOST` | `dashboard.host` (`127.0.0.1`) | Bind address; the Docker profile sets `0.0.0.0` inside the container |
 
 A `.env` in the working directory is loaded automatically if present.
 
@@ -296,6 +330,11 @@ limits:
 
 ingest:
   media: false          # captions are stored; media is never downloaded
+
+dashboard:
+  enabled: false        # read-only web page; DASHBOARD_PORT=8787 also turns it on
+  host: 127.0.0.1
+  port: 8787
 
 groups:
   - jid: "120363000000000001@g.us"
@@ -328,8 +367,9 @@ vault/                   # Markdown notes (config vault.dir); gitignored
 
 Tables: `groups`, `messages` (per-group id, sender, timestamp, kind, body,
 `edited_ts`, soft `deleted` flag), `summaries` (stable id, window, watermark,
-text), `runs` (every attempt with status, cost, and watermark), and
-`deliveries` (one row per summary and channel: `queued`, `sent`, or `failed`).
+text), `runs` (every attempt with status, cost, and watermark),
+`deliveries` (one row per summary and channel: `queued`, `sent`, or `failed`),
+and `questions` (every `/ask` with its answer, cost, and status).
 Every query is scoped by `tenant_id`; the store has no method that reads
 across tenants. Schema changes are versioned migrations in `src/store/db.ts`.
 
@@ -416,7 +456,8 @@ better-sqlite3, zod 4, pino, commander, vitest, biome.
 5. ✅ **Group posting** (opt-in) behind the send queue and rate limits
 6. ✅ **Docker profile** for a VPS, with headless CLI auth or the `api-anthropic` fallback
 7. ✅ **OpenAI and Gemini adapters** — `api-openai` and `api-google`, mixable per group
-8. Nice-to-have: action items, `/ask <group> <question>`, local dashboard
+8. ✅ **Q&A and dashboard** — `/ask <group> <question>` over stored history, read-only local web dashboard
+9. Nice-to-have: action-item extraction as its own output
 
 Design decisions are recorded in `docs/adr/`.
 

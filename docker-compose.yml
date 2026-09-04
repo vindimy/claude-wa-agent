@@ -19,6 +19,14 @@ services:
     environment:
       # Fallback time zone for cadences without an explicit tz.
       TZ: ${TZ:-UTC}
+      # The dashboard (off unless DASHBOARD_PORT is set in .env) must bind to
+      # all interfaces inside the container; `ports:` below keeps it on the
+      # VPS loopback.
+      DASHBOARD_HOST: 0.0.0.0
+    # Uncomment to reach the dashboard through an SSH tunnel:
+    #   ssh -L 8787:127.0.0.1:8787 vps   →   http://127.0.0.1:8787
+    # ports:
+    #   - "127.0.0.1:${DASHBOARD_PORT:-8787}:${DASHBOARD_PORT:-8787}"
     volumes:
       - ./config.yaml:/app/config.yaml:ro
       - ./data:/app/data

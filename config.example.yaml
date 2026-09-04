@@ -63,6 +63,16 @@ limits:
 ingest:
   media: false
 
+# Read-only web dashboard: session state, send budget, per-group schedule and
+# backlog, runs, summaries, questions, outbox. No login, so it binds to
+# loopback. DASHBOARD_PORT in the environment turns it on and overrides the
+# port; DASHBOARD_HOST overrides the bind address (Docker needs 0.0.0.0 inside
+# the container, and the compose file publishes it on the VPS loopback only).
+dashboard:
+  enabled: false
+  host: 127.0.0.1
+  port: 8787
+
 groups:
   - jid: "120363000000000001@g.us"
     name: "Example group"

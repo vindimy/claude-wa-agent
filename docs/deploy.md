@@ -138,6 +138,13 @@ docker compose exec digest node dist/cli/index.js summarize "Family" --since 2d 
 listener through the volume, exactly as on the host: vault notes are written
 directly, WhatsApp sends are queued for the listener.
 
+Optional dashboard: set `DASHBOARD_PORT=8787` in `.env`, uncomment the
+`ports:` block in `docker-compose.yml`, and `docker compose up -d`. The
+compose file binds the dashboard to `0.0.0.0` inside the container and
+publishes it on `127.0.0.1` of the VPS only, so reach it through an SSH
+tunnel (`ssh -L 8787:127.0.0.1:8787 vps`). It is read-only and has no login;
+do not publish it on a public interface.
+
 Upgrade: `docker compose pull && docker compose up -d`. The session survives
 because auth lives in the volume; migrations run on startup.
 
