@@ -8,5 +8,6 @@ export {
   type GroupConfig,
   type ResolvedGroupConfig,
   resolveGroupConfig,
+  type SummarizerOptions,
   type SummaryOptions,
 } from './schema.js';

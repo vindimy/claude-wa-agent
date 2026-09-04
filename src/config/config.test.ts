@@ -103,3 +103,17 @@ describe('loadConfig', () => {
     if (!result.ok) expect(result.error.tag).toBe('validate');
   });
 });
+
+describe('summarizers section', () => {
+  it('defaults to an empty map and validates per-adapter options', () => {
+    const empty = configSchema.parse({});
+    expect(empty.summarizers).toEqual({});
+    const parsed = configSchema.parse({
+      summarizers: { 'cli-claude': { model: 'sonnet', timeout_seconds: 120 } },
+    });
+    expect(parsed.summarizers['cli-claude']?.model).toBe('sonnet');
+    expect(() =>
+      configSchema.parse({ summarizers: { 'cli-claude': { timeout_seconds: -1 } } }),
+    ).toThrow();
+  });
+});

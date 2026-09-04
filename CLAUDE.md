@@ -152,6 +152,49 @@ host and docker profiles simultaneously against the same `data/auth`.
 7. Nice-to-have: action-item extraction, `/ask <group> <question>` over stored
    history, simple local web dashboard.
 
+## Service direction (multi-tenant, BYO account)
+
+Beyond the single-user agent, the long-term goal is a hosted service where
+each customer links **their own** WhatsApp account to our backend (QR / pairing
+code), and we summarize the groups they already belong to. We never operate
+bot numbers and never read a group a tenant is not a member of.
+
+### Why this direction
+- Meta's official Groups API only covers groups the business itself creates
+  (invite-link, OBA-only). It cannot join existing groups, so it does not fit
+  "summarize the chats you already have."
+- Dedicated bot numbers put ban risk on *our* numbers and scale with SIM cards.
+- BYO account keeps the account risk with the tenant. This is an unofficial
+  client path and a WhatsApp ToS gray zone; the product must say so plainly
+  during onboarding, and the architecture must make a per-tenant logout
+  harmless.
+
+### Architectural consequences (apply from phase 1 onward)
+- **Tenant is a first-class key.** Every table, every log line, every queue
+  item carries `tenant_id`. No cross-tenant reads, ever. Auth state lives in
+  `data/tenants/<tenant_id>/auth/`, one Baileys socket per tenant, supervised.
+- **Session lifecycle is a product feature, not an error path.** Pairing,
+  reconnect, logout (401), and "phone offline" are explicit states surfaced to
+  the tenant. A logged-out tenant pauses cleanly; nothing else is affected.
+- **Human-like send discipline per tenant** (jitter, daily cap, no bursts) —
+  the queue limits move from global to per-tenant.
+- **Summarizer adapters become API-key based** (`api-*`) for the service;
+  the personal CLI adapters stay owner-only and are never used for tenants.
+- **Data handling**: encrypt auth state and message bodies at rest, tenant-
+  configurable retention (default 30 days for the service), one-click export
+  and delete. Assume EU tenants: GDPR-grade consent to summarize, a privacy
+  policy, and a DPA before any paid tier.
+- **Group posting stays opt-in per group**, signed as an automated digest.
+- **Deployment**: the Docker profile is the service profile. Stateless app
+  container(s) + persistent volume per tenant now; move to object storage for
+  auth/state when we pass a handful of tenants.
+
+### Not yet
+Billing, web onboarding UI, and admin dashboard are out of scope until the
+single-user agent has run reliably for a month. Do not build multi-tenant
+scaffolding that the single-user path doesn't also use — same code, tenant
+count of one.
+
 ## Open questions (resolve before phase 5)
 
 - Whether unattended use of subscription CLI auth is acceptable under each

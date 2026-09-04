@@ -13,6 +13,13 @@ defaults:
     style: topics           # topics | narrative | action-items
     max_words: 300
 
+# Per-adapter options, keyed by adapter name. All keys optional.
+summarizers:
+  cli-claude:
+    model: sonnet         # alias or full model id; omit for the CLI's default
+    timeout_seconds: 180
+    # bin: /usr/local/bin/claude
+
 limits:
   max_sends_per_day: 30
 

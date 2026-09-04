@@ -66,8 +66,16 @@ export const groupConfigSchema = z.object({
   summary: summaryOverrideSchema.optional(),
 });
 
+/** Options for one summarizer adapter, keyed by adapter name under `summarizers:`. */
+export const summarizerOptionsSchema = z.object({
+  bin: z.string().optional(),
+  model: z.string().optional(),
+  timeout_seconds: z.number().positive().optional(),
+});
+
 export const configSchema = z.object({
   defaults: defaultsSchema.prefault({}),
+  summarizers: z.record(z.string(), summarizerOptionsSchema).default({}),
   limits: z.object({ max_sends_per_day: z.number().int().positive().default(30) }).prefault({}),
   ingest: z.object({ media: z.boolean().default(false) }).prefault({}),
   groups: z.array(groupConfigSchema).default([]),
@@ -76,6 +84,7 @@ export const configSchema = z.object({
 export type Cadence = z.infer<typeof cadenceSchema>;
 export type Deliver = z.infer<typeof deliverSchema>;
 export type SummaryOptions = z.infer<typeof summarySchema>;
+export type SummarizerOptions = z.infer<typeof summarizerOptionsSchema>;
 export type GroupConfig = z.infer<typeof groupConfigSchema>;
 export type Config = z.infer<typeof configSchema>;
 

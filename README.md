@@ -8,8 +8,9 @@ summaries on a schedule using locally authenticated AI CLIs (`claude`,
 
 Single-user, self-hosted, all data stays on disk. Not a SaaS.
 
-> **Project status: phase 1 of 7 (listen + store).** The agent pairs, ingests
-> allow-listed groups into SQLite, and lists what it sees. No summaries and no
+> **Project status: phase 2 of 7 (summarize on demand).** The agent pairs,
+> ingests allow-listed groups into SQLite, and can summarize any stored window
+> with `digest summarize … --dry-run`. Summaries are printed only; no
 > outbound messages yet. See [Roadmap](#roadmap).
 
 ## Why
@@ -37,7 +38,7 @@ One Node/TypeScript process, split into modules with typed boundaries:
 | `src/store/`     | SQLite via better-sqlite3: groups, messages (edits, soft deletes)      | ✅ done |
 | `src/config/`    | zod-validated `config.yaml` + env, per-group overrides over defaults   | ✅ done |
 | `src/cli/`       | `digest run`, `digest groups`                                          | ✅ done |
-| `src/summarizer/`| Adapter interface: `cli-claude`, `cli-gemini`, `cli-codex`, `api-*`    | phase 2 |
+| `src/summarizer/`| Adapter interface; `fake` and `cli-claude` shipped, `cli-gemini`, `cli-codex`, `api-*` later | done    |
 | `src/delivery/`  | Idempotent fan-out: self-DM, Markdown vault, group post               | phase 3 |
 | `src/scheduler/` | Daily / weekly / threshold triggers with restart-safe watermarks       | phase 4 |
 
@@ -57,7 +58,7 @@ message bodies are never logged above `debug`.
 
 Full constraints, conventions, and reasoning live in [`CLAUDE.md`](CLAUDE.md).
 
-## Getting started (phase 1)
+## Getting started
 
 Requirements: Node 20.6+ and pnpm.
 
@@ -107,7 +108,25 @@ allow-listed groups are ever stored; everything else is dropped at the socket.
 | `pnpm digest run`    | Run the listener once, no reload                                     |
 | `pnpm digest groups` | List every group the account is in, with allow-list mark and counts  |
 
-Coming in phase 2: `pnpm digest summarize <group> --since 2d --dry-run`.
+| `pnpm digest summarize <group> --since 2d --dry-run` | Summarize one group's stored messages and print the result |
+
+`<group>` is a JID, the `name` from `config.yaml`, or the group subject as
+WhatsApp shows it. `--since` takes `30m`, `12h`, `2d`, `1w`, or an ISO date.
+Flags `--adapter`, `--style`, `--language`, `--max-words`, and `--tz` override
+the group's config for one run. Without `--dry-run` the command refuses to run
+until delivery lands in phase 3.
+
+#### Summarizer adapters
+
+| Adapter      | What it does                                                                    |
+| ------------ | ------------------------------------------------------------------------------- |
+| `cli-claude` | Spawns `claude -p` with the transcript on stdin: no tools, no session files, no settings pickup. Uses your existing CLI login. |
+| `fake`       | Deterministic stats-only output with no external call. For tests and plumbing. |
+
+The prompt asks for plain WhatsApp-friendly text, keeps the transcript's
+Russian/English mix unless `summary.language` pins one, and hard-caps length at
+`summary.max_words`. Per-adapter `model`, `timeout_seconds`, and `bin` live
+under `summarizers:` in `config.yaml`.
 
 ### Environment
 
@@ -126,7 +145,7 @@ override any of `summarizer`, `cadence`, `deliver`, or `summary`.
 
 ```yaml
 defaults:
-  summarizer: cli-claude
+  summarizer: cli-claude        # fake | cli-claude
   cadence: { type: daily, at: "08:00", tz: "America/Los_Angeles" }
   deliver: { self_dm: true, group: false, vault: true }
   summary: { language: auto, style: topics, max_words: 300 }
@@ -196,7 +215,20 @@ pnpm format       # biome --write
 
 Tests run without a network or a paired device. The listener's message
 classification is a pure function (`src/listener/extract.ts`) tested against
-fixture payloads, so the socket lifecycle is the only untested surface.
+fixture payloads, and the summarizer's prompt building and output parsing are
+tested against a bundled bilingual transcript
+(`src/summarizer/__fixtures__/team-chat.json`). The one test that calls the
+real `claude` binary is opt-in:
+
+```sh
+INTEGRATION=1 pnpm test                       # uses the CLI's default model
+INTEGRATION=1 INTEGRATION_MODEL=haiku pnpm test
+```
+
+A `cli-claude` summary of the 25-message fixture costs about one cent on
+sonnet. The adapter passes `--strict-mcp-config` so your MCP servers' tool
+definitions do not ride along on every call; without it the same request was
+roughly 25× more expensive.
 
 Stack: TypeScript (strict), Node 20+, [Baileys](https://github.com/WhiskeySockets/Baileys) 7,
 better-sqlite3, zod 4, pino, commander, vitest, biome.
@@ -204,7 +236,7 @@ better-sqlite3, zod 4, pino, commander, vitest, biome.
 ## Roadmap
 
 1. ✅ **Listen + store** — pair, ingest allow-listed groups, `digest groups`
-2. **Summarize on demand** — `fake` and `cli-claude` adapters, `--dry-run`
+2. ✅ **Summarize on demand** — `fake` and `cli-claude` adapters, `--dry-run`
 3. **Deliver** to self-DM and Markdown vault with idempotent run records
 4. **Scheduler** — daily / weekly / threshold cadences, restart-safe watermarks
 5. **Group posting** (opt-in) behind the send queue and rate limits
