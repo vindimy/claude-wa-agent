@@ -1,15 +1,20 @@
-# WhatsApp group digest agent — Docker / service profile.
-# See docs/deploy.md. Never run this against the same data/ directory as a
-# host (pm2/launchd) instance: one linked session per tenant auth directory.
+# WhatsApp group digest agent — Docker / service profile. See docs/deploy.md.
+#
+# Runs the prebuilt image from GitHub Container Registry. To build locally
+# instead:  docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+#
+# Never run this against the same data/ directory as a host (pm2/launchd)
+# instance: one linked session per tenant auth directory.
 services:
   digest:
-    build: .
-    image: wa-digest-agent:local
+    image: ghcr.io/vindimy/claude-wa-agent:${DIGEST_IMAGE_TAG:-latest}
     container_name: wa-digest
     restart: unless-stopped
     init: true
     # Long enough for the outbox to finish an in-flight send.
     stop_grace_period: 20s
+    # Match the host user that owns ./data and ./vault (id -u / id -g).
+    user: "${PUID:-1000}:${PGID:-1000}"
     env_file: .env
     environment:
       # Fallback time zone for cadences without an explicit tz.
@@ -18,8 +23,6 @@ services:
       - ./config.yaml:/app/config.yaml:ro
       - ./data:/app/data
       - ./vault:/app/vault
-    # The container runs as uid 1000 (node). If ./data is owned by another
-    # user on the host, either chown it or set `user: "${UID}:${GID}"` here.
     logging:
       driver: json-file
       options:

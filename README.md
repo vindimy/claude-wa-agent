@@ -63,6 +63,29 @@ Full constraints, conventions, and reasoning live in [`CLAUDE.md`](CLAUDE.md).
 
 ## Getting started
 
+### Run with Docker (fewest steps)
+
+Prebuilt images are published to `ghcr.io/vindimy/claude-wa-agent` on every
+push to `main` and on every `v*` tag. On a machine with Docker:
+
+```bash
+git clone git@github.com:vindimy/claude-wa-agent.git && cd claude-wa-agent
+cp config.example.yaml config.yaml   # allow-list your groups
+cp .env.example .env                 # PUID/PGID, TZ, and one summarizer auth option
+mkdir -p data vault
+docker compose pull
+docker compose run --rm digest run   # scan the QR, wait for "connected", Ctrl-C
+docker compose up -d
+```
+
+The summarizer needs either `CLAUDE_CODE_OAUTH_TOKEN` (from `claude
+setup-token`, owner-only) or `SUMMARIZER=api-anthropic` with
+`ANTHROPIC_API_KEY` in `.env`. Pin a version with `DIGEST_IMAGE_TAG=0.1.0`.
+Everything else, including logging in to a private package, is in
+[`docs/deploy.md`](docs/deploy.md).
+
+### Run from source
+
 Requirements: Node 20.6+ and pnpm.
 
 ```bash
@@ -309,10 +332,12 @@ Two profiles run the same code:
   under pm2 or launchd. The `claude` CLI is already logged in, so `cli-claude`
   works as-is.
 - **docker** (VPS, also the future service profile): `docker compose up -d`
-  with `./data`, `./vault`, and `config.yaml` mounted. The image installs the
-  `claude` CLI; authenticate it with `CLAUDE_CODE_OAUTH_TOKEN` from
-  `claude setup-token`, or set `SUMMARIZER=api-anthropic` plus
-  `ANTHROPIC_API_KEY` to skip the CLI entirely.
+  pulls `ghcr.io/vindimy/claude-wa-agent` and mounts `./data`, `./vault`, and
+  `config.yaml`. The image installs the `claude` CLI; authenticate it with
+  `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token`, or set
+  `SUMMARIZER=api-anthropic` plus `ANTHROPIC_API_KEY` to skip the CLI
+  entirely. CI builds amd64 and arm64 images on every push to `main` and
+  tags them by version on `v*` tags.
 
 Never run both profiles against the same `data/` directory. Step-by-step
 instructions, pairing inside the container, and the failure modes we know

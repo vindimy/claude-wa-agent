@@ -31,17 +31,39 @@ Migrations run on startup.
 
 ## Docker profile
 
+Prebuilt multi-arch images (amd64, arm64) are published to
+`ghcr.io/vindimy/claude-wa-agent` by `.github/workflows/docker.yml`:
+
+| Git ref | Image tags |
+| --- | --- |
+| push to `main` | `latest`, `sha-<short sha>` |
+| tag `v1.2.3` | `1.2.3`, `1.2`, `latest` |
+
+Cut a release with `git tag v0.2.0 && git push origin v0.2.0`. Pin the VPS to
+it with `DIGEST_IMAGE_TAG=0.2.0` in `.env`; leave it unset to track `latest`.
+
 ### 1. Prepare the directory on the VPS
 
 ```bash
 git clone git@github.com:vindimy/claude-wa-agent.git && cd claude-wa-agent
 cp config.example.yaml config.yaml && $EDITOR config.yaml
 cp .env.example .env && $EDITOR .env
-mkdir -p data vault && sudo chown -R 1000:1000 data vault   # container runs as uid 1000
+mkdir -p data vault
 ```
 
-Set `TZ` in `.env` to the zone you think in; cadences without their own `tz`
-use it.
+In `.env` set `PUID`/`PGID` to your uid and gid (`id -u`, `id -g`) so the
+container writes `data/` and `vault/` as you, and `TZ` to the zone you think
+in (cadences without their own `tz` use it).
+
+While the GitHub repository is private its packages are private too, so log
+in once with a personal access token that has `read:packages`:
+
+```bash
+echo "$GHCR_TOKEN" | docker login ghcr.io -u vindimy --password-stdin
+```
+
+Make the package public in GitHub → Packages → `claude-wa-agent` → Package
+settings if you would rather skip the login.
 
 ### 2. Pick how the summarizer authenticates
 
@@ -77,10 +99,10 @@ a fifth of the cost per digest.
 Option A can also be used on the host and option B in Docker, or the other
 way round. Nothing else changes.
 
-### 3. Build and pair
+### 3. Pull and pair
 
 ```bash
-docker compose build
+docker compose pull
 docker compose run --rm digest run
 ```
 
@@ -91,6 +113,13 @@ then Ctrl-C. Auth state is now in `./data/tenants/owner/auth/`.
 If the QR is too dense for the terminal, make the window taller or lower the
 font size; the code is a normal WhatsApp Web QR and expires after about a
 minute, at which point a fresh one prints.
+
+To build from the checkout instead of pulling (for local changes), add the
+overlay to every compose command:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+```
 
 ### 4. Run
 
@@ -106,8 +135,8 @@ docker compose exec digest node dist/cli/index.js summarize "Family" --since 2d 
 listener through the volume, exactly as on the host: vault notes are written
 directly, WhatsApp sends are queued for the listener.
 
-Upgrade: `git pull && docker compose build && docker compose up -d`. The
-session survives because auth lives in the volume.
+Upgrade: `docker compose pull && docker compose up -d`. The session survives
+because auth lives in the volume; migrations run on startup.
 
 ### 5. Moving between host and Docker
 
@@ -126,11 +155,12 @@ session survives because auth lives in the volume.
 - **`Not logged in` from `cli-claude` in Docker.** The token is missing or
   expired. Regenerate with `claude setup-token` and restart. Or switch to
   option B for the night: `SUMMARIZER=api-anthropic` in `.env`.
-- **`EACCES` writing `data/` or `vault/`.** The bind mounts are owned by a
-  different uid than 1000. Either `chown -R 1000:1000` them or add
-  `user: "<uid>:<gid>"` to the service in `docker-compose.yml`.
+- **`EACCES` writing `data/` or `vault/`.** `PUID`/`PGID` in `.env` do not
+  match the owner of the bind mounts. Set them to `id -u` / `id -g`.
+- **`denied` on `docker compose pull`.** The package is private and you are
+  not logged in to `ghcr.io`, or the token lacks `read:packages`.
 - **Digests fire at the wrong hour.** The cadence has no `tz` and the
   container is on UTC. Set `TZ` in `.env` or `tz` on the cadence.
 - **`better-sqlite3` fails to load after an upgrade.** The prebuilt binary
-  did not match the Node version. `docker compose build --no-cache`; the
-  build stage has the toolchain to compile it.
+  did not match the Node version. Rebuild with the build overlay and
+  `--no-cache`; the build stage has the toolchain to compile it.

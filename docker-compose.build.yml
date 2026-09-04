@@ -1,0 +1,6 @@
+# Overlay: build the image from this checkout instead of pulling it.
+#   docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+services:
+  digest:
+    build: .
+    image: wa-digest-agent:local
