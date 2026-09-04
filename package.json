@@ -1,6 +1,6 @@
 {
   "name": "wa-digest-agent",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "packageManager": "pnpm@11.25.0",
   "description": "WhatsApp group digest agent — listens to allow-listed groups and produces scheduled summaries",
