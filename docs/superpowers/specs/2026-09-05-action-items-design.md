@@ -1,6 +1,6 @@
 # Action-item extraction as its own output (phase 13)
 
-Status: approved design, 2026-09-05. Tracks GitHub issue #6.
+Status: drafted 2026-09-05 and shelved before implementation; the shape (structured, stored, per run, off by default) was agreed, the details below were not yet reviewed. Tracks GitHub issue #6.
 
 ## Goal
 
