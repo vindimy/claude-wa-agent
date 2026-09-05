@@ -99,9 +99,13 @@ const STYLE_INSTRUCTIONS = {
 } as const;
 
 const LANGUAGE_INSTRUCTIONS = {
-  auto: 'Write in the language(s) the chat itself uses. If the chat mixes Russian and English, keep that mix and use the dominant language for structure.',
-  ru: 'Write the entire summary in Russian.',
+  auto: 'Write in the language(s) the chat itself uses. If the chat mixes languages, keep that mix and use the dominant language for structure.',
   en: 'Write the entire summary in English.',
+  ru: 'Write the entire summary in Russian.',
+  pt: 'Write the entire summary in Portuguese.',
+  es: 'Write the entire summary in Spanish.',
+  zh: 'Write the entire summary in Chinese.',
+  ja: 'Write the entire summary in Japanese.',
 } as const;
 
 export function buildSystemPrompt(input: SummaryInput): string {

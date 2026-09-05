@@ -154,6 +154,20 @@ describe.skipIf(!process.env.INTEGRATION)('cli-claude adapter (INTEGRATION=1)', 
     // must reflect the transcript, not hallucinate
     expect(text).toMatch(/11:30|48|Sept(ember)? 15|Sasha|Саша/);
   }, 240_000);
+
+  it('writes the summary in Japanese when language is ja', async () => {
+    const s = createClaudeCliSummarizer({ model: process.env.INTEGRATION_MODEL });
+    const base = fixtureInput();
+    const r = await s.summarize({ ...base, options: { ...base.options, language: 'ja' } });
+    if (!r.ok) throw new Error(`summarize failed: ${JSON.stringify(r.error)}`);
+    const { text, model, costUsd, durationMs } = r.value;
+    console.log(`\n${text}\n\nmodel=${model} cost=$${costUsd} ${durationMs}ms`);
+    // hiragana, katakana, or kanji must dominate the letters
+    const japanese = (text.match(/[\u3040-\u30ff\u4e00-\u9fff]/g) ?? []).length;
+    const latin = (text.match(/[a-zA-Z]/g) ?? []).length;
+    expect(japanese).toBeGreaterThan(50);
+    expect(japanese).toBeGreaterThan(latin);
+  }, 240_000);
 });
 
 describe('cli-claude complete()', () => {

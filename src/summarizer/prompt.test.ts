@@ -157,9 +157,33 @@ describe('buildPrompt', () => {
     expect(system).not.toContain('Markdown "#"');
   });
 
-  it('describes the mixed-language rule for auto', () => {
+  it('describes the mixed-language rule for auto without naming any language', () => {
     const { system } = buildPrompt(input([row()]));
-    expect(system).toContain('mixes Russian and English');
+    expect(system).toContain('language(s) the chat itself uses');
+    expect(system).toContain('mixes languages');
+    expect(system).not.toContain('Russian');
+  });
+
+  it.each([
+    ['en', 'entire summary in English'],
+    ['ru', 'entire summary in Russian'],
+    ['pt', 'entire summary in Portuguese'],
+    ['es', 'entire summary in Spanish'],
+    ['zh', 'entire summary in Chinese'],
+    ['ja', 'entire summary in Japanese'],
+  ] as const)('pins the summary language for %s', (language, expected) => {
+    const { system } = buildPrompt(
+      input([row()], {
+        options: {
+          language,
+          style: 'topics',
+          max_words: 300,
+          personality: 'neutral',
+          instructions: '',
+        },
+      }),
+    );
+    expect(system).toContain(expected);
   });
 
   it('omits the voice and instructions sections when both are empty', () => {

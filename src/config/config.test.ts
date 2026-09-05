@@ -59,6 +59,19 @@ describe('configSchema', () => {
     expect(result.success).toBe(false);
   });
 
+  it.each(['auto', 'ru', 'en', 'pt', 'es', 'zh', 'ja'])(
+    'accepts summary language %s',
+    (language) => {
+      const result = configSchema.safeParse({ defaults: { summary: { language } } });
+      expect(result.success).toBe(true);
+    },
+  );
+
+  it('rejects an unknown summary language', () => {
+    const result = configSchema.safeParse({ defaults: { summary: { language: 'xx' } } });
+    expect(result.success).toBe(false);
+  });
+
   it('rejects a threshold cadence without messages', () => {
     const result = configSchema.safeParse({
       groups: [{ jid: '1@g.us', cadence: { type: 'threshold', max_hours: 24 } }],

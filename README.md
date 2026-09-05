@@ -265,8 +265,8 @@ with `@file`. An adapter that cannot see the picture leaves the image job
 `skipped`; the caption still stands.
 
 The prompt asks for plain WhatsApp-friendly text, writes in English unless
-`summary.language` says otherwise (`ru`, or `auto` to keep the transcript's
-Russian/English mix), and hard-caps length at `summary.max_words`. Per-adapter `model`, `timeout_seconds`, and `bin` live
+`summary.language` says otherwise (`ru`, `pt`, `es`, `zh`, `ja`, or `auto` to
+keep the transcript's own language mix), and hard-caps length at `summary.max_words`. Per-adapter `model`, `timeout_seconds`, and `bin` live
 under `summarizers:` in `config.yaml`. `SUMMARIZER=<adapter>` in the
 environment forces one adapter for every group without editing the file.
 
@@ -337,7 +337,7 @@ defaults:
   cadence: { type: daily, at: "08:00", tz: "America/Los_Angeles" }
   deliver: { self_dm: true, group: false, vault: true }
   summary:
-    language: en                # auto keeps the chat's mix
+    language: en                # en | ru | pt | es | zh | ja | auto (keeps the chat's mix)
     style: topics
     max_words: 300
     personality: neutral        # or dry | friendly | russian-sarcasm | executive | newsroom | butler | hype
@@ -495,7 +495,7 @@ better-sqlite3, zod 4, pino, commander, vitest, biome.
 8. ✅ **Q&A and dashboard** — `/ask <group> <question>` over stored history, read-only local web dashboard
 9. ✅ **`/digest` options in the self-chat** — style, language, length, voice, adapter as `key=value`
 10. ✅ **Image and link enrichment** — photos and links described into the transcript, off by default, capped per day
-11. More summary languages (`pt`, `es`, `zh`, `ja`)
+11. ✅ **More summary languages** — `pt`, `es`, `zh`, `ja` alongside `en`, `ru`, `auto`
 12. Typing indicator on the self-chat while a reply is produced
 13. Nice-to-have: action-item extraction as its own output
 

@@ -37,8 +37,8 @@ Scale comes from the tenant key, not from redesigns.
    its own volume (object storage for auth/state later). No third-party message
    storage. No cross-tenant reads, ever.
 6. Groups are multilingual (Russian + English). Summaries are written in
-   English by default (`summary.language: en`); a group config can pin `ru`
-   or set `auto` to preserve the source's language mix.
+   English by default (`summary.language: en`); a group config can pin `ru`,
+   `pt`, `es`, `zh`, or `ja`, or set `auto` to preserve the source's language mix.
 
 ## Architecture
 
@@ -102,7 +102,7 @@ defaults:
   cadence: { type: daily, at: "08:00", tz: "America/Los_Angeles" }
   deliver: { self_dm: true, group: false, vault: true }
   summary:
-    language: en            # en | ru | auto
+    language: en            # en | ru | pt | es | zh | ja | auto
     style: topics           # topics | narrative | action-items
     max_words: 300
     personality: neutral    # preset or a key under personalities:; tone only
@@ -246,13 +246,13 @@ host and docker profiles simultaneously against the same
     (`ingest.describe_images` / `ingest.describe_links`). GitHub issue #3.
     *(shipped, see `docs/adr/0006-*`)*
 11. **More summary languages**: `pt`, `es`, `zh`, `ja` alongside `en`, `ru`,
-    `auto`. GitHub issue #4.
+    `auto`. GitHub issue #4. *(shipped)*
 12. **Typing indicator**: `composing` presence on the self-chat while a
     `/digest` or `/ask` reply is being produced. Never in groups. GitHub
     issue #5.
 13. Nice-to-have: action-item extraction as its own output.
 
-Phases 11–12 are queued in that order and worked one at a time.
+Phase 12 is next.
 
 ## Service direction (multi-tenant, BYO account)
 

@@ -234,7 +234,7 @@ program
   .option('--post', 'also post into the group (only if it has deliver.group: true)')
   .option('--adapter <name>', `summarizer adapter (${ADAPTER_NAMES.join(', ')})`)
   .option('--style <style>', 'topics | narrative | action-items')
-  .option('--language <lang>', 'auto | ru | en')
+  .option('--language <lang>', 'auto | en | ru | pt | es | zh | ja')
   .option('--max-words <n>', 'length cap', (v: string) => Number.parseInt(v, 10))
   .option('--personality <name>', 'voice: a preset or a name under personalities:')
   .option('--instructions <text>', 'extra plain-English guidance, appended to the configured text')

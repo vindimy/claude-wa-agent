@@ -515,7 +515,7 @@ Seven adapters exist today:
 | `fake` | none | Deterministic stats; for plumbing checks |
 
 All adapters run the same prompt, honour `summary.language` (English by
-default), `summary.personality`, and `summary.instructions`, and respect
+default; `ru`, `pt`, `es`, `zh`, `ja`, or `auto`), `summary.personality`, and `summary.instructions`, and respect
 `summary.max_words`. The three API adapters write a cost estimate into
 `runs.cost_usd` from the vendor's published per-token prices (null for a
 model not in the table); `cli-claude` records what the CLI reports;

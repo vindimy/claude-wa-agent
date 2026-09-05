@@ -104,6 +104,13 @@ describe('parseCommand /digest options', () => {
     });
   });
 
+  it.each(['pt', 'es', 'zh', 'ja'])('accepts lang=%s in the self-chat', (language) => {
+    expect(parseCommand(`/digest Family lang=${language}`)).toMatchObject({
+      kind: 'digest',
+      options: { language },
+    });
+  });
+
   it('rejects unknown keys and bad values without running anything', () => {
     expect(parseCommand('/digest Family foo=bar')).toMatchObject({
       kind: 'invalid',

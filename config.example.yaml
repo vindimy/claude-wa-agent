@@ -9,7 +9,7 @@ defaults:
   cadence: { type: daily, at: "08:00", tz: "America/Los_Angeles" }
   deliver: { self_dm: true, group: false, vault: true }
   summary:
-    language: en            # en (default) | ru | auto (keep the chat's own mix)
+    language: en            # en (default) | ru | pt | es | zh | ja | auto (keep the chat's own mix)
     style: topics           # topics | narrative | action-items
     max_words: 300
     # Voice of the summary. Presets: neutral (default) | dry | friendly |
