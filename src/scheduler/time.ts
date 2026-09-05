@@ -111,6 +111,18 @@ export function previousWeekly(day: Weekday, at: string, tz: string, nowTs: numb
   return Math.floor(candidate / 1000);
 }
 
+/** Most recent local midnight in `tz` at or before `nowTs` (unix seconds). */
+export function startOfLocalDay(nowTs: number, tz: string): number {
+  const p = localParts(nowTs * 1000, tz);
+  return Math.floor(zonedToUtcMs(p.year, p.month, p.day, 0, 0, tz) / 1000);
+}
+
+/** The local midnight in `tz` that follows `nowTs` (unix seconds). */
+export function nextLocalMidnight(nowTs: number, tz: string): number {
+  const p = localParts(nowTs * 1000, tz);
+  return Math.floor(zonedToUtcMs(p.year, p.month, p.day + 1, 0, 0, tz) / 1000);
+}
+
 export function systemTimeZone(): string {
   return Intl.DateTimeFormat().resolvedOptions().timeZone;
 }

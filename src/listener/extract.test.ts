@@ -1,6 +1,6 @@
 import type { proto } from 'baileys';
 import { describe, expect, it } from 'vitest';
-import { extractAction, extractContent, toUnixSeconds } from './extract.js';
+import { extractAction, extractContent, imageMimeType, toUnixSeconds } from './extract.js';
 
 const GROUP = '120363000000000001@g.us';
 
@@ -33,6 +33,18 @@ describe('extractContent', () => {
     });
     expect(extractContent({ imageMessage: {} })).toEqual({ kind: 'image', body: null });
     expect(extractContent({ audioMessage: {} })).toEqual({ kind: 'audio', body: null });
+  });
+
+  it('reports the mime type of an image, through wrappers, defaulting to jpeg', () => {
+    expect(imageMimeType({ imageMessage: { mimetype: 'image/png' } })).toBe('image/png');
+    expect(imageMimeType({ imageMessage: {} })).toBe('image/jpeg');
+    expect(
+      imageMimeType({
+        viewOnceMessageV2: { message: { imageMessage: { mimetype: 'image/webp' } } },
+      }),
+    ).toBe('image/webp');
+    expect(imageMimeType({ conversation: 'text' })).toBeUndefined();
+    expect(imageMimeType(null)).toBeUndefined();
   });
 
   it('unwraps ephemeral messages', () => {

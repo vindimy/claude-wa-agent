@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { claudeArgs, createClaudeCliSummarizer, parseClaudeOutput } from './cli-claude.js';
-import { loadFixtureTranscript } from './fixtures.js';
+import {
+  claudeArgs,
+  claudeImageArgs,
+  claudeImagePrompt,
+  createClaudeCliSummarizer,
+  parseClaudeOutput,
+} from './cli-claude.js';
+import { imageRequest, loadFixtureTranscript } from './fixtures.js';
 import type { SummaryInput } from './types.js';
 
 describe('parseClaudeOutput', () => {
@@ -162,4 +168,32 @@ describe('cli-claude complete()', () => {
     });
     expect(!r.ok && r.error.tag).toBe('spawn');
   });
+});
+
+describe('cli-claude describeImage', () => {
+  it('enables only the Read tool and points the model at the file', () => {
+    const args = claudeImageArgs('SYS', undefined);
+    expect(args).toEqual(expect.arrayContaining(['--tools', 'Read', '--allowedTools', 'Read']));
+    expect(args).toContain('--strict-mcp-config');
+    expect(args.indexOf('--system-prompt')).toBeGreaterThan(-1);
+    expect(claudeImagePrompt('Describe it.', '/tmp/p.png')).toMatch(
+      /Read the image file at \/tmp\/p\.png[\s\S]*Describe it\./,
+    );
+  });
+
+  it('surfaces a missing binary as a spawn error', async () => {
+    const s = createClaudeCliSummarizer({ bin: '/nonexistent/claude' });
+    const r = await s.describeImage?.(imageRequest());
+    expect(r && !r.ok && r.error.tag).toBe('spawn');
+  });
+});
+
+describe.skipIf(!process.env.INTEGRATION)('cli-claude describeImage (INTEGRATION=1)', () => {
+  it('describes the red square fixture', async () => {
+    const s = createClaudeCliSummarizer({ model: process.env.INTEGRATION_MODEL });
+    const r = await s.describeImage?.(imageRequest());
+    if (!r?.ok) throw new Error(`describeImage failed: ${JSON.stringify(r?.error)}`);
+    console.log(`\n${r.value.text}\n`);
+    expect(r.value.text.toLowerCase()).toMatch(/red|square/);
+  }, 240_000);
 });

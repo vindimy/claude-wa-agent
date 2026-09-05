@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { codexArgs, codexPrompt, createCodexCliSummarizer, parseCodexOutput } from './cli-codex.js';
-import { loadFixtureTranscript } from './fixtures.js';
+import { fixturePath, imageRequest, loadFixtureTranscript } from './fixtures.js';
 import type { SummaryInput } from './types.js';
 
 const jsonl = (...events: unknown[]) => `${events.map((e) => JSON.stringify(e)).join('\n')}\n`;
@@ -200,5 +200,55 @@ describe.skipIf(!process.env.INTEGRATION)('cli-codex adapter (INTEGRATION=1)', (
     expect(text.length).toBeGreaterThan(100);
     expect(text.split(/\s+/).length).toBeLessThan(320);
     expect(text).toMatch(/11:30|48|Sept(ember)? 15|Sasha|Саша/);
+  }, 240_000);
+});
+
+describe('cli-codex describeImage', () => {
+  it('passes the file with -i and the prompt on stdin', async () => {
+    const s = createCodexCliSummarizer({ bin: fakeCodexArgvBin(), timeoutMs: 10_000 });
+    const path = fixturePath('red-square.png');
+    const r = await s.describeImage?.({
+      tenantId: 'owner',
+      groupJid: 'g@g.us',
+      system: 'SYS',
+      user: 'Describe the attached image.',
+      image: { path, mimeType: 'image/png' },
+    });
+    expect(r?.ok).toBe(true);
+    if (!r?.ok) return;
+    const [argv, stdin] = r.value.text.split('\n<<<STDIN>>>\n');
+    expect(argv?.split(' ')).toEqual(expect.arrayContaining(['exec', '-i', path]));
+    expect(stdin).toBe(codexPrompt('SYS', 'Describe the attached image.'));
+  });
+});
+
+/** Like fakeCodexBin, but the agent message carries argv, a separator, then stdin. */
+function fakeCodexArgvBin(): string {
+  const dir = mkdtempSync(join(tmpdir(), 'fake-codex-'));
+  const bin = join(dir, 'codex');
+  writeFileSync(
+    bin,
+    `#!${process.execPath}
+const fs = require('node:fs');
+const input = fs.readFileSync(0, 'utf8');
+const text = process.argv.slice(2).join(' ') + '\\n<<<STDIN>>>\\n' + input;
+const out = [
+  { type: 'item.completed', item: { id: 'i', type: 'agent_message', text } },
+  { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } },
+];
+process.stdout.write(out.map((e) => JSON.stringify(e)).join('\\n') + '\\n');
+`,
+  );
+  chmodSync(bin, 0o755);
+  return bin;
+}
+
+describe.skipIf(!process.env.INTEGRATION)('cli-codex describeImage (INTEGRATION=1)', () => {
+  it('describes the red square fixture', async () => {
+    const s = createCodexCliSummarizer({ model: process.env.INTEGRATION_MODEL });
+    const r = await s.describeImage?.(imageRequest());
+    if (!r?.ok) throw new Error(`describeImage failed: ${JSON.stringify(r?.error)}`);
+    console.log(`\n${r.value.text}\n`);
+    expect(r.value.text.toLowerCase()).toMatch(/red|square/);
   }, 240_000);
 });

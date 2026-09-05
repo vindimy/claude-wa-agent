@@ -34,8 +34,10 @@ export {
 export {
   isValidTimeZone,
   localParts,
+  nextLocalMidnight,
   previousDaily,
   previousWeekly,
+  startOfLocalDay,
   systemTimeZone,
   type Weekday,
   zonedToUtcMs,

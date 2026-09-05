@@ -4,10 +4,13 @@ import {
   type GenerateContentResponse,
   GoogleGenAI,
 } from '@google/genai';
-import { createLogger, err, ok } from '../shared/index.js';
+import { createLogger, err, ok, type Result } from '../shared/index.js';
+import { readImageBase64 } from './image-file.js';
 import { summarizeVia } from './summarize-via.js';
 import {
   type AdapterOptions,
+  type Completion,
+  type CompletionPurpose,
   purposeVerb,
   type Summarizer,
   type SummarizerError,
@@ -70,7 +73,7 @@ export interface ApiGoogleDeps {
 
 export function googleRequest(
   system: string,
-  user: string,
+  user: GenerateContentParameters['contents'],
   model: string,
   timeoutMs: number,
 ): GenerateContentParameters {
@@ -83,6 +86,19 @@ export function googleRequest(
       httpOptions: { timeout: timeoutMs },
     },
   };
+}
+
+/** The image as an inline part, then the text, in one user turn. */
+export function imageContents(
+  image: { data: string; mimeType: string },
+  user: string,
+): GenerateContentParameters['contents'] {
+  return [
+    {
+      role: 'user',
+      parts: [{ inlineData: { mimeType: image.mimeType, data: image.data } }, { text: user }],
+    },
+  ];
 }
 
 /**
@@ -98,18 +114,24 @@ export function createApiGoogleSummarizer(
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   let generate = deps.generate;
 
-  const complete: Summarizer['complete'] = async (req) => {
+  async function call(
+    ctx: { tenantId: string; groupJid: string; purpose: CompletionPurpose },
+    system: string,
+    user: string,
+    contents: GenerateContentParameters['contents'],
+  ): Promise<Result<Completion, SummarizerError>> {
     log.info(
       {
-        tenant_id: req.tenantId,
-        group: req.groupJid,
-        purpose: req.purpose,
-        chars: req.user.length,
+        tenant_id: ctx.tenantId,
+        group: ctx.groupJid,
+        purpose: ctx.purpose,
+        chars: user.length,
         model,
       },
       'calling the Gemini API',
     );
-    log.debug({ system: req.system, user: req.user }, 'prompt');
+    log.debug({ system, user }, 'prompt');
+    const req = { ...ctx, system, user };
 
     if (!generate) {
       const apiKey = deps.apiKey ?? process.env.GOOGLE_API_KEY ?? process.env.GEMINI_API_KEY;
@@ -130,7 +152,7 @@ export function createApiGoogleSummarizer(
     const started = Date.now();
     let response: GenerateContentResponse;
     try {
-      response = await generate(googleRequest(req.system, req.user, model, timeoutMs));
+      response = await generate(googleRequest(req.system, contents, model, timeoutMs));
     } catch (e) {
       return err(classifyGoogleError(e, timeoutMs));
     }
@@ -173,12 +195,27 @@ export function createApiGoogleSummarizer(
         ? estimateGoogleCostUsd(usedModel, response.usageMetadata)
         : null,
     });
+  }
+
+  const complete: Summarizer['complete'] = (req) => call(req, req.system, req.user, req.user);
+
+  const describeImage: NonNullable<Summarizer['describeImage']> = async (req) => {
+    const image = await readImageBase64(req.image.path);
+    if (!image.ok) return image;
+    const ctx = { tenantId: req.tenantId, groupJid: req.groupJid, purpose: 'describe' as const };
+    return call(
+      ctx,
+      req.system,
+      req.user,
+      imageContents({ data: image.value, mimeType: req.image.mimeType }, req.user),
+    );
   };
 
   return {
     name: 'api-google',
     summarize: (input) => summarizeVia('api-google', input, complete),
     complete,
+    describeImage,
   };
 }
 

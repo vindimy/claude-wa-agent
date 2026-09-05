@@ -56,8 +56,23 @@ export const summarySchema = z.object({
   instructions: summaryShape.instructions.default(''),
 });
 
+// Ingest knobs: `media` keeps downloaded image files on disk; the describe_*
+// flags enqueue a model call per photo / per link, so all are off by default.
+const ingestShape = {
+  media: z.boolean(),
+  describe_images: z.boolean(),
+  describe_links: z.boolean(),
+};
+
+export const ingestSchema = z.object({
+  media: ingestShape.media.default(false),
+  describe_images: ingestShape.describe_images.default(false),
+  describe_links: ingestShape.describe_links.default(false),
+});
+
 const deliverOverrideSchema = z.object(deliverShape).partial();
 const summaryOverrideSchema = z.object(summaryShape).partial();
+const ingestOverrideSchema = z.object(ingestShape).partial();
 
 const defaultsSchema = z
   .object({
@@ -82,6 +97,7 @@ export const groupConfigSchema = z.object({
   cadence: cadenceSchema.optional(),
   deliver: deliverOverrideSchema.optional(),
   summary: summaryOverrideSchema.optional(),
+  ingest: ingestOverrideSchema.optional(),
 });
 
 /** Options for one summarizer adapter, keyed by adapter name under `summarizers:`. */
@@ -111,7 +127,16 @@ export const configSchema = z
         min_group_post_gap_minutes: z.number().nonnegative().default(60),
       })
       .prefault({}),
-    ingest: z.object({ media: z.boolean().default(false) }).prefault({}),
+    ingest: ingestSchema.prefault({}),
+    // Image and link descriptions (phase 10): which adapter writes them and
+    // how many model calls a tenant may spend on them per local day.
+    enrich: z
+      .object({
+        /** Adapter for descriptions; falls back to `defaults.summarizer`. */
+        summarizer: z.string().optional(),
+        max_per_day: z.number().int().positive().default(200),
+      })
+      .prefault({}),
     // Read-only local web dashboard, off by default. Bound to loopback; in
     // Docker set host 0.0.0.0 (or DASHBOARD_HOST) and publish the port to
     // the VPS loopback only.
@@ -148,6 +173,7 @@ export type Cadence = z.infer<typeof cadenceSchema>;
 export type Deliver = z.infer<typeof deliverSchema>;
 export type SummaryOptions = z.infer<typeof summarySchema>;
 export type SummarizerOptions = z.infer<typeof summarizerOptionsSchema>;
+export type IngestOptions = z.infer<typeof ingestSchema>;
 export type GroupConfig = z.infer<typeof groupConfigSchema>;
 export type DashboardConfig = Config['dashboard'];
 export type Config = z.infer<typeof configSchema>;
@@ -160,6 +186,7 @@ export interface ResolvedGroupConfig {
   cadence: Cadence;
   deliver: Deliver;
   summary: SummaryOptions;
+  ingest: IngestOptions;
 }
 
 export function resolveGroupConfig(config: Config, jid: string): ResolvedGroupConfig | undefined {
@@ -172,7 +199,13 @@ export function resolveGroupConfig(config: Config, jid: string): ResolvedGroupCo
     cadence: group.cadence ?? config.defaults.cadence,
     deliver: { ...config.defaults.deliver, ...group.deliver },
     summary: mergeSummary(config.defaults.summary, group.summary),
+    ingest: { ...config.ingest, ...group.ingest },
   };
+}
+
+/** The adapter that writes image and link descriptions. */
+export function enrichSummarizer(config: Config): string {
+  return config.enrich.summarizer ?? config.defaults.summarizer;
 }
 
 /**

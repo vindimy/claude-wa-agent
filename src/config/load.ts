@@ -18,6 +18,7 @@ export function overrideSummarizer(config: Config, name: string): Config {
   return {
     ...config,
     defaults: { ...config.defaults, summarizer: name },
+    enrich: { ...config.enrich, summarizer: name },
     groups: config.groups.map((g) => {
       const { summarizer: _dropped, ...rest } = g;
       return rest;

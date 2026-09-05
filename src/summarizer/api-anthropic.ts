@@ -1,8 +1,11 @@
 import Anthropic from '@anthropic-ai/sdk';
-import { createLogger, err, ok } from '../shared/index.js';
+import { createLogger, err, ok, type Result } from '../shared/index.js';
+import { readImageBase64 } from './image-file.js';
 import { summarizeVia } from './summarize-via.js';
 import {
   type AdapterOptions,
+  type Completion,
+  type CompletionPurpose,
   purposeVerb,
   type Summarizer,
   type SummarizerError,
@@ -60,7 +63,11 @@ export interface ApiAnthropicDeps {
   apiKey?: string;
 }
 
-export function apiRequest(system: string, user: string, model: string): CreateParams {
+export function apiRequest(
+  system: string,
+  user: string | Anthropic.Beta.Messages.BetaContentBlockParam[],
+  model: string,
+): CreateParams {
   return {
     model,
     max_tokens: MAX_TOKENS,
@@ -71,6 +78,24 @@ export function apiRequest(system: string, user: string, model: string): CreateP
     betas: ['server-side-fallback-2026-07-01'],
     fallbacks: 'default',
   };
+}
+
+/** Image first, then the question, per the vision docs' recommended order. */
+export function imageContent(
+  image: { data: string; mimeType: string },
+  user: string,
+): Anthropic.Beta.Messages.BetaContentBlockParam[] {
+  return [
+    {
+      type: 'image',
+      source: {
+        type: 'base64',
+        media_type: image.mimeType as 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp',
+        data: image.data,
+      },
+    },
+    { type: 'text', text: user },
+  ];
 }
 
 /**
@@ -87,18 +112,25 @@ export function createApiAnthropicSummarizer(
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   let create = deps.create;
 
-  const complete: Summarizer['complete'] = async (req) => {
+  /** One Messages call; `content` is the user turn (text or image + text). */
+  async function call(
+    ctx: { tenantId: string; groupJid: string; purpose: CompletionPurpose },
+    system: string,
+    user: string,
+    content: string | Anthropic.Beta.Messages.BetaContentBlockParam[],
+  ): Promise<Result<Completion, SummarizerError>> {
     log.info(
       {
-        tenant_id: req.tenantId,
-        group: req.groupJid,
-        purpose: req.purpose,
-        chars: req.user.length,
+        tenant_id: ctx.tenantId,
+        group: ctx.groupJid,
+        purpose: ctx.purpose,
+        chars: user.length,
         model,
       },
       'calling the Anthropic API',
     );
-    log.debug({ system: req.system, user: req.user }, 'prompt');
+    log.debug({ system, user }, 'prompt');
+    const req = { ...ctx, system, user };
 
     if (!create) {
       try {
@@ -116,7 +148,7 @@ export function createApiAnthropicSummarizer(
     const started = Date.now();
     let response: Anthropic.Beta.Messages.BetaMessage;
     try {
-      response = await create(apiRequest(req.system, req.user, model), { timeout: timeoutMs });
+      response = await create(apiRequest(req.system, content, model), { timeout: timeoutMs });
     } catch (e) {
       return err(classifyError(e, timeoutMs));
     }
@@ -147,12 +179,27 @@ export function createApiAnthropicSummarizer(
       durationMs,
       costUsd: estimateCostUsd(response.model, response.usage),
     });
+  }
+
+  const complete: Summarizer['complete'] = (req) => call(req, req.system, req.user, req.user);
+
+  const describeImage: NonNullable<Summarizer['describeImage']> = async (req) => {
+    const image = await readImageBase64(req.image.path);
+    if (!image.ok) return image;
+    const ctx = { tenantId: req.tenantId, groupJid: req.groupJid, purpose: 'describe' as const };
+    return call(
+      ctx,
+      req.system,
+      req.user,
+      imageContent({ data: image.value, mimeType: req.image.mimeType }, req.user),
+    );
   };
 
   return {
     name: 'api-anthropic',
     summarize: (input) => summarizeVia('api-anthropic', input, complete),
     complete,
+    describeImage,
   };
 }
 

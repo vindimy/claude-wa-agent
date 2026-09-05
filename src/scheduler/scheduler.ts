@@ -27,7 +27,16 @@ export interface SchedulerOptions {
   tz?: string;
   /** Passed through to runDigest (test seam). */
   summarizerFactory?: DigestRequest['summarizerFactory'];
+  /**
+   * The enrichment worker, when one runs alongside. A `/digest` from the
+   * self-chat drains the target group's pending descriptions first so the
+   * digest sees them; scheduled runs have hours of slack and do not.
+   */
+  enrichment?: { drain(groupJid: string, deadlineMs: number): Promise<number> };
 }
+
+/** How long a `/digest` waits for pending image and link descriptions. */
+const DRAIN_BEFORE_COMMAND_MS = 30_000;
 
 export interface TickOutcome {
   groupJid: string;
@@ -238,6 +247,15 @@ export function startScheduler(opts: SchedulerOptions): SchedulerHandle {
 
     const lines: string[] = [];
     for (const group of targets) {
+      if (opts.enrichment) {
+        const remaining = await opts.enrichment.drain(group.jid, DRAIN_BEFORE_COMMAND_MS);
+        if (remaining > 0) {
+          log.info(
+            { group: group.jid, remaining },
+            'running digest with descriptions still pending',
+          );
+        }
+      }
       const sinceTs =
         since ?? windowSince(group.cadence, store.lastWatermark(tenantId, group.jid), nowTs);
       const r = await runGroup(group, sinceTs, 'command', {

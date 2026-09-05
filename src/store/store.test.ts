@@ -1,5 +1,9 @@
+import { existsSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
+  type NewEnrichment,
   type NewMessage,
   type QuestionRecord,
   type RunRecord,
@@ -554,5 +558,143 @@ describe('Store: dashboard reads', () => {
       { day: '2025-09-02', count: 2 },
       { day: '2025-09-03', count: 1 },
     ]);
+  });
+});
+
+describe('Store: enrichment', () => {
+  let store: Store;
+  beforeEach(() => {
+    store = new Store(':memory:');
+  });
+
+  const job = (overrides: Partial<NewEnrichment> = {}): NewEnrichment => ({
+    tenantId: T,
+    id: 'MSG1:image',
+    groupJid: 'g1@g.us',
+    messageId: 'MSG1',
+    kind: 'image',
+    payload: '/tmp/x.jpg',
+    createdTs: 1000,
+    ...overrides,
+  });
+
+  it('reads back messages with no description and no links by default', () => {
+    store.insertMessage(msg({ kind: 'image', body: 'cap' }));
+    const row = store.getMessage(T, 'g1@g.us', 'MSG1');
+    expect(row?.mediaDescription).toBeNull();
+    expect(row?.links).toEqual([]);
+  });
+
+  it('stores a media description and a list of links on a message', () => {
+    store.insertMessage(msg({ kind: 'image', body: 'cap' }));
+    store.setMediaDescription(T, 'g1@g.us', 'MSG1', 'A cat on a sofa.');
+    store.setLinks(T, 'g1@g.us', 'MSG1', [
+      { url: 'https://a.example/', title: 'A', description: 'Site A.' },
+      { url: 'https://b.example/', title: null, description: null },
+    ]);
+    const row = store.messagesSince(T, 'g1@g.us', 0)[0];
+    expect(row?.mediaDescription).toBe('A cat on a sofa.');
+    expect(row?.links).toEqual([
+      { url: 'https://a.example/', title: 'A', description: 'Site A.' },
+      { url: 'https://b.example/', title: null, description: null },
+    ]);
+  });
+
+  it('enqueues once; a re-enqueue of the same id is a no-op', () => {
+    store.enqueueEnrichment(job());
+    store.completeEnrichment(T, 'MSG1:image', 2000);
+    store.enqueueEnrichment(job({ createdTs: 3000 }));
+    expect(store.claimDueEnrichments(T, 10_000, 10)).toEqual([]);
+    expect(store.enrichmentCounts(T, 0)).toEqual({ queued: 0, failed: 0, done: 1 });
+  });
+
+  it('claims due queued jobs oldest first, up to a limit, optionally per group', () => {
+    store.enqueueEnrichment(job({ id: 'A:image', messageId: 'A', createdTs: 30 }));
+    store.enqueueEnrichment(job({ id: 'B:link:0', messageId: 'B', kind: 'link', createdTs: 10 }));
+    store.enqueueEnrichment(
+      job({ id: 'C:image', messageId: 'C', createdTs: 20, groupJid: 'g2@g.us' }),
+    );
+    store.deferEnrichment(T, 'A:image', 5000, 40);
+    expect(store.claimDueEnrichments(T, 100, 10).map((j) => j.id)).toEqual(['B:link:0', 'C:image']);
+    expect(store.claimDueEnrichments(T, 100, 1).map((j) => j.id)).toEqual(['B:link:0']);
+    expect(store.claimDueEnrichments(T, 100, 10, 'g2@g.us').map((j) => j.id)).toEqual(['C:image']);
+    expect(store.claimDueEnrichments(T, 6000, 10).map((j) => j.id)).toEqual([
+      'B:link:0',
+      'C:image',
+      'A:image',
+    ]);
+  });
+
+  it('records failures with backoff, then a permanent failure', () => {
+    store.enqueueEnrichment(job());
+    store.failEnrichment(T, 'MSG1:image', 'boom', 1060, 1000);
+    let j = store.claimDueEnrichments(T, 2000, 10)[0];
+    expect(j).toMatchObject({ status: 'queued', attempts: 1, error: 'boom', nextAttemptTs: 1060 });
+    expect(store.claimDueEnrichments(T, 1050, 10)).toEqual([]);
+    store.failEnrichment(T, 'MSG1:image', 'boom again', null, 1100);
+    expect(store.claimDueEnrichments(T, 99_999, 10)).toEqual([]);
+    expect(store.enrichmentCounts(T, 0)).toEqual({ queued: 0, failed: 1, done: 0 });
+    j = store.listEnrichments(T, 10)[0];
+    expect(j).toMatchObject({ status: 'failed', attempts: 2, error: 'boom again' });
+  });
+
+  it('skips a job with a reason', () => {
+    store.enqueueEnrichment(job());
+    store.skipEnrichment(T, 'MSG1:image', 'adapter cannot see images', 1500);
+    expect(store.listEnrichments(T, 10)[0]).toMatchObject({
+      status: 'skipped',
+      error: 'adapter cannot see images',
+      updatedTs: 1500,
+    });
+    expect(store.claimDueEnrichments(T, 99_999, 10)).toEqual([]);
+  });
+
+  it('counts model calls since a timestamp for the daily cap', () => {
+    store.enqueueEnrichment(job({ id: 'A:image', messageId: 'A' }));
+    store.enqueueEnrichment(job({ id: 'B:image', messageId: 'B' }));
+    store.enqueueEnrichment(job({ id: 'C:image', messageId: 'C' }));
+    store.markEnrichmentCalled(T, 'A:image', 100);
+    store.markEnrichmentCalled(T, 'B:image', 200);
+    expect(store.countEnrichmentCallsSince(T, 150)).toBe(1);
+    expect(store.countEnrichmentCallsSince(T, 0)).toBe(2);
+  });
+
+  it('counts pending jobs per group', () => {
+    store.enqueueEnrichment(job({ id: 'A:image', messageId: 'A' }));
+    store.enqueueEnrichment(job({ id: 'B:image', messageId: 'B', groupJid: 'g2@g.us' }));
+    store.enqueueEnrichment(job({ id: 'C:image', messageId: 'C' }));
+    store.completeEnrichment(T, 'C:image', 5);
+    expect(store.pendingEnrichments(T, 'g1@g.us')).toBe(1);
+    expect(store.pendingEnrichments(T, 'g2@g.us')).toBe(1);
+    expect(store.pendingEnrichments(T, 'g3@g.us')).toBe(0);
+  });
+
+  it('prunes enrichment rows and media files together with their messages', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'media-'));
+    const oldFile = join(dir, 'old.jpg');
+    const newFile = join(dir, 'new.jpg');
+    writeFileSync(oldFile, 'x');
+    writeFileSync(newFile, 'y');
+    store.insertMessage(msg({ id: 'OLD', ts: 100, kind: 'image' }));
+    store.insertMessage(msg({ id: 'NEW', ts: 900, kind: 'image' }));
+    store.enqueueEnrichment(job({ id: 'OLD:image', messageId: 'OLD', payload: oldFile }));
+    store.enqueueEnrichment(
+      job({ id: 'OLD:link:0', messageId: 'OLD', kind: 'link', payload: 'https://x.example' }),
+    );
+    store.enqueueEnrichment(job({ id: 'NEW:image', messageId: 'NEW', payload: newFile }));
+
+    expect(store.pruneMessagesBefore(T, 500)).toBe(1);
+    expect(store.listEnrichments(T, 10).map((j) => j.id)).toEqual(['NEW:image']);
+    expect(existsSync(oldFile)).toBe(false);
+    expect(existsSync(newFile)).toBe(true);
+  });
+
+  it('never leaks enrichment rows across tenants', () => {
+    store.enqueueEnrichment(job());
+    store.enqueueEnrichment(job({ tenantId: 'acme' }));
+    store.completeEnrichment('acme', 'MSG1:image', 5);
+    expect(store.claimDueEnrichments(T, 5000, 10)).toHaveLength(1);
+    expect(store.claimDueEnrichments('acme', 5000, 10)).toHaveLength(0);
+    expect(store.pendingEnrichments('acme', 'g1@g.us')).toBe(0);
   });
 });

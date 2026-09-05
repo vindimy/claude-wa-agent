@@ -18,6 +18,8 @@ function row(overrides: Partial<MessageRow> = {}): MessageRow {
     body: 'hi',
     editedTs: null,
     deleted: false,
+    mediaDescription: null,
+    links: [],
     ...overrides,
   };
 }
@@ -99,6 +101,40 @@ describe('formatTranscript', () => {
 
   it('returns an empty string for no messages', () => {
     expect(formatTranscript([], 'UTC')).toBe('');
+  });
+
+  it('shows an image description inside the photo label', () => {
+    const t = formatTranscript(
+      [
+        row({ id: '1', kind: 'image', body: 'menu', mediaDescription: 'A printed lunch menu.' }),
+        row({ id: '2', kind: 'image', body: null, mediaDescription: 'A dog.' }),
+        row({ id: '3', kind: 'image', body: 'plain', mediaDescription: null }),
+      ],
+      'UTC',
+    );
+    expect(t).toContain('Alice: [photo: A printed lunch menu.] menu');
+    expect(t).toContain('Alice: [photo: A dog.]');
+    expect(t).toContain('Alice: [photo] plain');
+  });
+
+  it('appends one description per link after the message text', () => {
+    const t = formatTranscript(
+      [
+        row({
+          id: '1',
+          body: 'see https://a.example/x and https://b.example/y',
+          links: [
+            { url: 'https://a.example/x', title: 'A', description: 'Page about A.' },
+            { url: 'https://b.example/y', title: null, description: null },
+          ],
+        }),
+      ],
+      'UTC',
+    );
+    expect(t).toContain(
+      'Alice: see https://a.example/x and https://b.example/y (link: Page about A.)',
+    );
+    expect(t.match(/\(link:/g)).toHaveLength(1);
   });
 });
 

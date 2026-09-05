@@ -1,5 +1,6 @@
 import {
   DisconnectReason,
+  downloadMediaMessage,
   fetchLatestBaileysVersion,
   isJidGroup,
   jidNormalizedUser,
@@ -7,11 +8,12 @@ import {
   useMultiFileAuthState,
 } from 'baileys';
 import qrcode from 'qrcode-terminal';
-import { allowedJids, type Config } from '../config/index.js';
+import { allowedJids, type Config, resolveGroupConfig } from '../config/index.js';
 import type { Transport } from '../delivery/index.js';
-import { createLogger, err, ok, tenantAuthDir } from '../shared/index.js';
+import { enqueueEnrichments } from '../enrich/index.js';
+import { createLogger, err, ok, tenantAuthDir, tenantMediaDir } from '../shared/index.js';
 import type { Store } from '../store/index.js';
-import { extractAction, extractContent, toUnixSeconds } from './extract.js';
+import { extractAction, extractContent, imageMimeType, toUnixSeconds } from './extract.js';
 
 const BACKOFF_BASE_MS = 1_000;
 const BACKOFF_CAP_MS = 60_000;
@@ -47,6 +49,8 @@ export async function startListener(deps: ListenerDeps): Promise<ListenerHandle>
   const log = createLogger('listener', { tenant_id: tenantId });
   const allowed = allowedJids(config);
   const authDir = tenantAuthDir(dataDir, tenantId);
+  const mediaDir = tenantMediaDir(dataDir, tenantId);
+  const baileysLog = createLogger('baileys', { tenant_id: tenantId });
 
   let stopped = false;
   let attempt = 0;
@@ -67,7 +71,7 @@ export async function startListener(deps: ListenerDeps): Promise<ListenerHandle>
     const sock = makeWASocket({
       version,
       auth: state,
-      logger: createLogger('baileys', { tenant_id: tenantId }),
+      logger: baileysLog,
       // no presence broadcast, no read receipts — we are a quiet observer
       markOnlineOnConnect: false,
     });
@@ -148,11 +152,41 @@ export async function startListener(deps: ListenerDeps): Promise<ListenerHandle>
 
         const action = extractAction(msg);
         switch (action.action) {
-          case 'insert':
-            store.insertMessage({ tenantId, ...action.message });
+          case 'insert': {
+            const stored = { tenantId, ...action.message };
+            store.insertMessage(stored);
             store.upsertGroup({ tenantId, jid, seenTs: action.message.ts });
             log.debug({ jid, id: action.message.id, kind: action.message.kind }, 'stored message');
+            const group = resolveGroupConfig(config, jid);
+            if (group && (group.ingest.describe_images || group.ingest.describe_links)) {
+              const mimeType = imageMimeType(msg.message);
+              // Media keys live only in the raw message, so the download has
+              // to happen here; links can be fetched any time later.
+              void enqueueEnrichments({
+                tenantId,
+                store,
+                group,
+                message: stored,
+                mediaDir,
+                image: mimeType
+                  ? {
+                      mimeType,
+                      download: () =>
+                        downloadMediaMessage(
+                          msg,
+                          'buffer',
+                          {},
+                          { logger: baileysLog, reuploadRequest: sock.updateMediaMessage },
+                        ),
+                    }
+                  : undefined,
+                nowTs: Math.floor(Date.now() / 1000),
+              }).catch((e) =>
+                log.warn({ jid, id: action.message.id, err: e }, 'enrichment enqueue failed'),
+              );
+            }
             break;
+          }
           case 'edit':
             store.applyEdit(tenantId, action.groupJid, action.id, action.body, action.editedTs);
             log.debug({ jid, id: action.id }, 'applied edit');

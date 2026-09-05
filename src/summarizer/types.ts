@@ -41,7 +41,7 @@ export type SummarizerError =
   | { tag: 'model'; message: string };
 
 /** What a `complete()` call is for; adapters use it in logs and error text. */
-export type CompletionPurpose = 'summary' | 'answer';
+export type CompletionPurpose = 'summary' | 'answer' | 'describe';
 
 /** One system+user prompt to send to the model, with routing context for logs. */
 export interface CompletionRequest {
@@ -59,20 +59,38 @@ export interface Completion {
   costUsd: number | null;
 }
 
+/** A prompt plus one image file for a vision-capable backend. */
+export interface ImageRequest {
+  tenantId: string;
+  groupJid: string;
+  system: string;
+  user: string;
+  image: { path: string; mimeType: string };
+}
+
 /**
  * A model backend. `summarize` is the digest path (fixed prompt, `Summary`
  * shape); `complete` sends any prompt the caller built, which is how `/ask`
- * reuses the same adapters and credentials.
+ * reuses the same adapters and credentials. `describeImage` is optional:
+ * an adapter without it cannot see pictures, and image jobs are skipped.
  */
 export interface Summarizer {
   readonly name: string;
   summarize(input: SummaryInput): Promise<Result<Summary, SummarizerError>>;
   complete(req: CompletionRequest): Promise<Result<Completion, SummarizerError>>;
+  describeImage?(req: ImageRequest): Promise<Result<Completion, SummarizerError>>;
 }
 
 /** Verb for "the model declined to …" messages. */
 export function purposeVerb(purpose: CompletionPurpose): string {
-  return purpose === 'answer' ? 'answer this question' : 'summarize this transcript';
+  switch (purpose) {
+    case 'answer':
+      return 'answer this question';
+    case 'describe':
+      return 'describe this content';
+    case 'summary':
+      return 'summarize this transcript';
+  }
 }
 
 /** Per-adapter settings from `summarizers.<name>` in config.yaml. */

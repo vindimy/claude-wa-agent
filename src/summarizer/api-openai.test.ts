@@ -7,7 +7,7 @@ import {
   estimateOpenAiCostUsd,
   openAiRequest,
 } from './api-openai.js';
-import { loadFixtureTranscript } from './fixtures.js';
+import { fixturePath, loadFixtureTranscript } from './fixtures.js';
 import type { SummaryInput } from './types.js';
 
 const input: SummaryInput = {
@@ -269,5 +269,42 @@ describe('api-openai complete()', () => {
     if (!r.ok) return;
     expect(r.value).toMatchObject({ text: 'Summary text', model: 'gpt-5.6-terra' });
     expect(seen).toEqual([{ instructions: 'ANSWER SYS', input: 'Question: who?' }]);
+  });
+});
+
+describe('api-openai describeImage', () => {
+  it('sends the image as an input_image data URL with the text', async () => {
+    let seen: OpenAI.Responses.ResponseCreateParamsNonStreaming | undefined;
+    const s = createApiOpenAiSummarizer(
+      {},
+      {
+        create: async (params) => {
+          seen = params;
+          return response({ output_text: ' A red square. ' });
+        },
+      },
+    );
+    const r = await s.describeImage?.({
+      tenantId: 'owner',
+      groupJid: 'g@g.us',
+      system: 'SYS',
+      user: 'Describe the attached image.',
+      image: { path: fixturePath('red-square.png'), mimeType: 'image/png' },
+    });
+    expect(r?.ok && r.value.text).toBe('A red square.');
+    expect(seen?.instructions).toBe('SYS');
+    const input = seen?.input as unknown as Array<{
+      role: string;
+      content: Array<Record<string, unknown>>;
+    }>;
+    expect(input[0]?.role).toBe('user');
+    expect(input[0]?.content[0]).toEqual({
+      type: 'input_text',
+      text: 'Describe the attached image.',
+    });
+    expect(input[0]?.content[1]).toMatchObject({
+      type: 'input_image',
+      image_url: expect.stringMatching(/^data:image\/png;base64,iVBOR/),
+    });
   });
 });

@@ -142,6 +142,8 @@ allow-listed groups are ever stored; everything else is dropped at the socket.
 | `pnpm digest schedule` | Show each group's cadence, last run, watermark, and whether it is due now |
 | `pnpm digest ask <group> "<question>" [--since 1w]` | Answer a question from the group's stored messages; printed, never sent |
 | `pnpm digest dashboard [--port 8787]` | Serve the read-only web dashboard from this shell |
+| `pnpm digest enrich` | Describe queued photos and links now (the listener does this on its own) |
+| `pnpm digest enrich --backfill-links <group> --since 2d` | Queue link descriptions for messages already stored |
 
 `<group>` is a JID, the `name` from `config.yaml`, or the group subject as
 WhatsApp shows it. `--since` takes `30m`, `12h`, `2d`, `1w`, or an ISO date.
@@ -256,6 +258,12 @@ treated as commands; history sync is ignored.
 | `api-google` | Calls the Gemini API with `GOOGLE_API_KEY` (or `GEMINI_API_KEY`). Default model `gemini-3.8-flash`; `gemini-3.1-pro-preview` for the larger model. Thinking tokens are billed as output and counted in the cost estimate. |
 | `fake`       | Deterministic stats-only output with no external call. For tests and plumbing. |
 
+With `ingest.describe_images` on, every adapter except `fake` can also
+describe photos: the API adapters send the image inline, `cli-codex` attaches
+it with `-i`, `cli-claude` reads it with its `Read` tool, and `cli-gemini`
+with `@file`. An adapter that cannot see the picture leaves the image job
+`skipped`; the caption still stands.
+
 The prompt asks for plain WhatsApp-friendly text, writes in English unless
 `summary.language` says otherwise (`ru`, or `auto` to keep the transcript's
 Russian/English mix), and hard-caps length at `summary.max_words`. Per-adapter `model`, `timeout_seconds`, and `bin` live
@@ -321,7 +329,7 @@ A `.env` in the working directory is loaded automatically if present.
 ## Configuration
 
 `config.yaml` is the source of truth. Every group inherits `defaults` and can
-override any of `summarizer`, `cadence`, `deliver`, or `summary`.
+override any of `summarizer`, `cadence`, `deliver`, `summary`, or `ingest`.
 
 ```yaml
 defaults:
@@ -342,7 +350,12 @@ limits:
   max_sends_per_day: 30
 
 ingest:
-  media: false          # captions are stored; media is never downloaded
+  media: false            # captions are stored; media is not kept on disk
+  describe_images: false  # download photos and describe them (one model call each)
+  describe_links: false   # fetch up to three links per message and describe them
+
+enrich:
+  max_per_day: 200        # cap on description model calls per day; summarizer: overrides the adapter
 
 dashboard:
   enabled: false        # read-only web page; DASHBOARD_PORT=8787 also turns it on
@@ -358,6 +371,7 @@ groups:
     name: "Family"
     cadence: { type: weekly, day: sun, at: "18:00" }
     summary: { language: ru, personality: friendly, instructions: "Baba is grandma." }
+    ingest: { describe_images: true, describe_links: true }   # photos and links get described
 ```
 
 Cadence types: `daily`, `weekly`, `threshold` (N messages or M hours, whichever
@@ -406,6 +420,14 @@ the host and Docker profiles against the same directory.
   `data/tenants/owner/auth/`, run again.
 - **Edits and deletions** update the stored message, so future summaries reflect
   the latest state.
+- **Photos and links** are described only for groups that opt in
+  (`ingest.describe_images`, `ingest.describe_links`). Photos are downloaded
+  at ingest and the file is deleted once described unless `ingest.media` is
+  on. Links are fetched with a 10 s timeout and a 1 MB cap, never from
+  private or loopback addresses, and never from login-walled hosts
+  (Instagram, Facebook, X, TikTok, LinkedIn). Descriptions cost one model
+  call each, capped by `enrich.max_per_day` per local day; the transcript
+  shows `[photo: …]` and `(link: …)`.
 
 This uses an unofficial client on a personal account. Ban risk is real; the
 agent is built to behave like a human who is simply present in the group.
@@ -471,7 +493,11 @@ better-sqlite3, zod 4, pino, commander, vitest, biome.
 6. ✅ **Docker profile** for a VPS, with headless CLI auth or the `api-anthropic` fallback
 7. ✅ **OpenAI and Gemini adapters** — `api-openai` and `api-google`, then `cli-gemini` and `cli-codex`, mixable per group
 8. ✅ **Q&A and dashboard** — `/ask <group> <question>` over stored history, read-only local web dashboard
-9. Nice-to-have: action-item extraction as its own output
+9. ✅ **`/digest` options in the self-chat** — style, language, length, voice, adapter as `key=value`
+10. ✅ **Image and link enrichment** — photos and links described into the transcript, off by default, capped per day
+11. More summary languages (`pt`, `es`, `zh`, `ja`)
+12. Typing indicator on the self-chat while a reply is produced
+13. Nice-to-have: action-item extraction as its own output
 
 Design decisions are recorded in `docs/adr/`.
 

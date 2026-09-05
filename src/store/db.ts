@@ -148,6 +148,32 @@ const MIGRATIONS: string[] = [
   );
   CREATE INDEX idx_questions_tenant_created ON questions (tenant_id, created_ts);
   `,
+  // 005 — image and link descriptions (phase 10, ADR 0006). Descriptions
+  // live on the message row; the work to produce them is a per-tenant queue.
+  `
+  ALTER TABLE messages ADD COLUMN media_description TEXT;
+  ALTER TABLE messages ADD COLUMN links TEXT;
+
+  CREATE TABLE enrichments (
+    tenant_id TEXT NOT NULL,
+    id TEXT NOT NULL,
+    group_jid TEXT NOT NULL,
+    message_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    status TEXT NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    next_attempt_ts INTEGER NOT NULL,
+    called_ts INTEGER,
+    error TEXT,
+    created_ts INTEGER NOT NULL,
+    updated_ts INTEGER NOT NULL,
+    PRIMARY KEY (tenant_id, id)
+  );
+  CREATE INDEX idx_enrichments_tenant_status_due ON enrichments (tenant_id, status, next_attempt_ts);
+  CREATE INDEX idx_enrichments_tenant_group_status ON enrichments (tenant_id, group_jid, status);
+  CREATE INDEX idx_enrichments_tenant_called ON enrichments (tenant_id, called_ts);
+  `,
 ];
 
 export const MIGRATION_COUNT = MIGRATIONS.length;

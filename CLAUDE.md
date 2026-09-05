@@ -55,9 +55,12 @@ src/
                 cli-codex, api-anthropic, api-openai, api-google)
   delivery/     self-dm, group-post, markdown-vault
   dashboard/    read-only local web page + JSON endpoints (node:http, no deps)
+  enrich/       image + link descriptions: ingest-time download, queue worker,
+                guarded link fetch (off by default, capped per day)
   config/       zod-validated config loading (config.yaml + env)
   cli/          `digest run`, `digest summarize <group> --since`, `digest groups`,
-                `digest ask <group> <question>`, `digest dashboard`, `digest schedule`
+                `digest ask <group> <question>`, `digest dashboard`, `digest schedule`,
+                `digest enrich [--backfill-links <group>]`
 ```
 
 Data flow: `listener → store → scheduler decides → summarizer (adapter) →
@@ -172,6 +175,12 @@ host and docker profiles simultaneously against the same
   everything and `errors.*` with warn and above, so problems can be read
   without scrolling the console.
 - Media is not downloaded by default (`ingest.media: false`). Captions are stored.
+  With `ingest.describe_images` on for a group, photos are downloaded at
+  ingest, described by `enrich.summarizer` (default: `defaults.summarizer`),
+  and the file is deleted unless `ingest.media` is on. `ingest.describe_links`
+  fetches up to three links per message (10 s, 1 MB, no private addresses,
+  no login-walled hosts) and describes them. Both are capped by
+  `enrich.max_per_day` model calls per local day (default 200).
 - Messages older than `retention.days` (30 by default; 60/90/180 allowed) are
   deleted hourly. Summaries, runs, and vault notes are never pruned.
 - Message deletions/edits update the store; summaries reflect the latest state.
@@ -235,6 +244,7 @@ host and docker profiles simultaneously against the same
     adapter and fetch links to describe what they point to; descriptions are
     stored on the message row and appear in the transcript. Off by default
     (`ingest.describe_images` / `ingest.describe_links`). GitHub issue #3.
+    *(shipped, see `docs/adr/0006-*`)*
 11. **More summary languages**: `pt`, `es`, `zh`, `ja` alongside `en`, `ru`,
     `auto`. GitHub issue #4.
 12. **Typing indicator**: `composing` presence on the self-chat while a
@@ -242,7 +252,7 @@ host and docker profiles simultaneously against the same
     issue #5.
 13. Nice-to-have: action-item extraction as its own output.
 
-Phases 10–12 are queued in that order and worked one at a time.
+Phases 11–12 are queued in that order and worked one at a time.
 
 ## Service direction (multi-tenant, BYO account)
 

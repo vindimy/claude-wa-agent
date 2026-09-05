@@ -52,12 +52,22 @@ export function displayName(m: Pick<MessageRow, 'senderJid' | 'senderName'>): st
   return m.senderJid.split('@')[0] ?? m.senderJid;
 }
 
+function kindLabel(m: MessageRow): string {
+  if (m.kind === 'text') return '';
+  const description = m.mediaDescription?.trim();
+  if (m.kind === 'image' && description) return `[photo: ${description}]`;
+  return KIND_LABEL[m.kind] ?? '[attachment]';
+}
+
 function messageLine(m: MessageRow, tz: string): string {
-  const label = m.kind === 'text' ? '' : (KIND_LABEL[m.kind] ?? '[attachment]');
   const body = m.body?.replace(/\s*\n\s*/g, ' ⏎ ').trim() ?? '';
-  const content = [label, body].filter(Boolean).join(' ') || '[empty]';
+  const content = [kindLabel(m), body].filter(Boolean).join(' ') || '[empty]';
+  const links = m.links
+    .filter((l) => l.description?.trim())
+    .map((l) => ` (link: ${l.description?.trim()})`)
+    .join('');
   const edited = m.editedTs ? ' (edited)' : '';
-  return `${formatTime(m.ts, tz)} ${displayName(m)}: ${content}${edited}`;
+  return `${formatTime(m.ts, tz)} ${displayName(m)}: ${content}${links}${edited}`;
 }
 
 /**

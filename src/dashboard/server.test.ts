@@ -44,6 +44,25 @@ describe('dashboard server', () => {
       durationMs: 1,
       createdTs: NOW - 10,
     });
+    for (const [id, status] of [
+      ['E1', 'queued'],
+      ['E2', 'failed'],
+      ['E3', 'done'],
+      ['E4', 'done-old'],
+    ] as const) {
+      store.enqueueEnrichment({
+        tenantId: 'owner',
+        id: `${id}:link:0`,
+        groupJid: G1,
+        messageId: id,
+        kind: 'link',
+        payload: 'https://x.example/',
+        createdTs: NOW - 100,
+      });
+      if (status === 'failed') store.failEnrichment('owner', `${id}:link:0`, 'x', null, NOW - 50);
+      if (status === 'done') store.completeEnrichment('owner', `${id}:link:0`, NOW - 50);
+      if (status === 'done-old') store.completeEnrichment('owner', `${id}:link:0`, NOW - 90_000);
+    }
     const scheduler = startScheduler({
       tenantId: 'owner',
       config,
@@ -98,6 +117,7 @@ describe('dashboard server', () => {
       retentionDays: 30,
       groupsConfigured: 1,
       nowTs: NOW,
+      enrichment: { queued: 1, failed: 1, doneToday: 1, maxPerDay: 200 },
     });
   });
 

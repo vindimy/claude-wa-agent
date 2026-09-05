@@ -6,4 +6,5 @@ export {
   type Tenant,
   tenantAuthDir,
   tenantDir,
+  tenantMediaDir,
 } from './tenant.js';

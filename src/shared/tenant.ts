@@ -19,6 +19,11 @@ export function tenantAuthDir(dataDir: string, tenantId: string): string {
   return join(tenantDir(dataDir, tenantId), 'auth');
 }
 
+/** Downloaded images awaiting (or, with `ingest.media`, kept after) description. */
+export function tenantMediaDir(dataDir: string, tenantId: string): string {
+  return join(tenantDir(dataDir, tenantId), 'media');
+}
+
 /**
  * One-time move of a pre-ADR-0001 `<dataDir>/auth/` into the owner tenant's
  * directory so an already-paired install keeps its session. Returns the

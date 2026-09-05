@@ -3,6 +3,7 @@ export {
   extractAction,
   extractContent,
   type IngestAction,
+  imageMimeType,
   toUnixSeconds,
 } from './extract.js';
 export {

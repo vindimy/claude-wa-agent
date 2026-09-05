@@ -395,6 +395,8 @@ digest summarize "Dance planning" --since 1w --post     # also post into the gro
 digest ask "Family" "when is the dacha trip?"           # answer from everything stored for the group
 digest ask "Family" --since 2w "who is bringing the cake?"
 digest ask "Family" --adapter api-anthropic "что решили про дачу?"   # answers in the question's language
+digest enrich                                           # describe queued photos and links now
+digest enrich --backfill-links "Family" --since 2d      # queue link descriptions for stored messages
 ```
 
 `<group>` accepts a JID, the configured name, or the WhatsApp subject.
@@ -476,7 +478,8 @@ Answers never post into a group and never move a digest watermark.
 
 ## Dashboard
 
-A read-only web page with the session state, today's send budget, each
+A read-only web page with the session state, today's send budget, the
+description queue (done today against the cap, queued, failed), each
 group's schedule and backlog with two weeks of activity, recent runs,
 summaries and where they went, questions, and the outbox. It refreshes every
 30 s and needs nothing from the internet.
@@ -558,6 +561,43 @@ reads only its own. `api-openai` and `api-google` slot into the same
 `summarizers:` map and `summarizer:` key with `OPENAI_API_KEY` and
 `GOOGLE_API_KEY`, so a group can be moved between vendors by changing one
 line.
+
+## Photos and links in the transcript
+
+Off by default. Turn either on per group (or under `ingest:` for all):
+
+```yaml
+groups:
+  - jid: "1203630YYYYYYYY@g.us"
+    name: "Family"
+    ingest: { describe_images: true, describe_links: true }
+```
+
+- **Photos** are downloaded the moment they arrive (the decryption keys exist
+  only then), described by `enrich.summarizer` (defaults to
+  `defaults.summarizer`; `SUMMARIZER=` overrides both), and the file is
+  deleted unless `ingest.media: true`. The transcript shows
+  `[photo: a printed lunch menu, prices in rubles] <caption>`. Photos posted
+  before the flag was on cannot be described later.
+- **Links**: up to three per message are fetched (10 s, 1 MB, five
+  redirects) and summarized in one line, shown as `(link: …)` after the
+  message. Private and loopback addresses are refused; Instagram, Facebook,
+  X/Twitter, TikTok and LinkedIn are never fetched because they only serve a
+  login page. PDFs and other non-HTML links keep a title guessed from the
+  URL. `digest enrich --backfill-links "Family" --since 2d` queues link
+  descriptions for messages already stored.
+- **Cost**: one model call per photo and per fetched link, capped by
+  `enrich.max_per_day` (200) across all groups per local day. At the cap the
+  rest wait for midnight; the log says so once a day. Vision on the CLI
+  adapters costs nothing extra on a subscription; on the API adapters a
+  photo is roughly a thousand input tokens.
+- **Timing**: the worker in `digest run` polls every 10 s. A `/digest` from
+  the self-chat waits up to 30 s for that group's pending descriptions;
+  scheduled digests do not wait. Failed jobs retry after 1, 5, and 30
+  minutes, then stay `failed` with the error in the dashboard status.
+- **Which adapters can see photos**: all but `fake`. `cli-claude` and
+  `cli-gemini` read the file through their own tools; if that stops working
+  in a CLI release, image jobs show as `skipped` and captions still stand.
 
 ## When something is off
 

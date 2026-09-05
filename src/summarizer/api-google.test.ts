@@ -1,4 +1,8 @@
-import { ApiError, type GenerateContentResponse } from '@google/genai';
+import {
+  ApiError,
+  type GenerateContentParameters,
+  type GenerateContentResponse,
+} from '@google/genai';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   classifyGoogleError,
@@ -7,7 +11,7 @@ import {
   estimateGoogleCostUsd,
   googleRequest,
 } from './api-google.js';
-import { loadFixtureTranscript } from './fixtures.js';
+import { fixturePath, loadFixtureTranscript } from './fixtures.js';
 import type { SummaryInput } from './types.js';
 
 const input: SummaryInput = {
@@ -303,5 +307,38 @@ describe('api-google complete()', () => {
     if (!r.ok) return;
     expect(r.value.text).toBe('Summary text');
     expect(seen).toEqual([{ system: 'ANSWER SYS', contents: 'Question: who?' }]);
+  });
+});
+
+describe('api-google describeImage', () => {
+  it('sends the image as an inlineData part with the text', async () => {
+    let seen: GenerateContentParameters | undefined;
+    const s = createApiGoogleSummarizer(
+      {},
+      {
+        generate: async (params) => {
+          seen = params;
+          return response({ modelVersion: 'gemini-3.8-flash' });
+        },
+      },
+    );
+    const r = await s.describeImage?.({
+      tenantId: 'owner',
+      groupJid: 'g@g.us',
+      system: 'SYS',
+      user: 'Describe the attached image.',
+      image: { path: fixturePath('red-square.png'), mimeType: 'image/png' },
+    });
+    expect(r?.ok && r.value.text).toBe('Summary text');
+    expect(seen?.config?.systemInstruction).toBe('SYS');
+    const contents = seen?.contents as Array<{
+      role: string;
+      parts: Array<Record<string, unknown>>;
+    }>;
+    expect(contents[0]?.role).toBe('user');
+    expect(contents[0]?.parts[0]).toMatchObject({
+      inlineData: { mimeType: 'image/png', data: expect.stringMatching(/^iVBOR/) },
+    });
+    expect(contents[0]?.parts[1]).toEqual({ text: 'Describe the attached image.' });
   });
 });

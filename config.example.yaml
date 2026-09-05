@@ -68,8 +68,17 @@ limits:
   max_sends_per_day: 30           # WhatsApp sends per tenant in any rolling 24 h
   min_group_post_gap_minutes: 60  # spacing between two posts into the same group
 
+# Image and link descriptions (phase 10). Each description is one model
+# call, so both are off by default; turn them on per group (or globally).
+# `media: true` keeps downloaded image files on disk after describing them.
 ingest:
   media: false
+  describe_images: false   # download each photo and describe it with a vision adapter
+  describe_links: false    # fetch up to three links per message and describe them
+
+enrich:
+  # summarizer: api-google  # adapter for descriptions; defaults to defaults.summarizer
+  max_per_day: 200          # model calls for descriptions per day, all groups together
 
 # Read-only web dashboard: session state, send budget, per-group schedule and
 # backlog, runs, summaries, questions, outbox. No login, so it binds to
@@ -95,3 +104,5 @@ groups:
       language: ru
       personality: friendly
       instructions: "Baba is grandma; the twins are Masha and Dasha."
+    # Describe photos and links in this group only.
+    # ingest: { describe_images: true, describe_links: true }

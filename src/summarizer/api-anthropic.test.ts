@@ -6,7 +6,7 @@ import {
   createApiAnthropicSummarizer,
   estimateCostUsd,
 } from './api-anthropic.js';
-import { loadFixtureTranscript } from './fixtures.js';
+import { fixturePath, loadFixtureTranscript } from './fixtures.js';
 import type { SummaryInput } from './types.js';
 
 const input: SummaryInput = {
@@ -243,5 +243,49 @@ describe('api-anthropic complete()', () => {
       purpose: 'answer',
     });
     expect(!r.ok && r.error.tag === 'model' && r.error.message).toContain('declined to answer');
+  });
+});
+
+describe('api-anthropic describeImage', () => {
+  it('sends the image as a base64 block before the text', async () => {
+    let seen: Anthropic.Beta.Messages.MessageCreateParamsNonStreaming | undefined;
+    const s = createApiAnthropicSummarizer(
+      {},
+      {
+        create: async (params) => {
+          seen = params;
+          return response({
+            content: [{ type: 'text', text: ' A red square. ', citations: null }],
+          });
+        },
+      },
+    );
+    const r = await s.describeImage?.({
+      tenantId: 'owner',
+      groupJid: 'g@g.us',
+      system: 'SYS',
+      user: 'Describe the attached image.',
+      image: { path: fixturePath('red-square.png'), mimeType: 'image/png' },
+    });
+    expect(r?.ok && r.value.text).toBe('A red square.');
+    expect(seen?.system).toBe('SYS');
+    const content = seen?.messages[0]?.content as unknown as Array<Record<string, unknown>>;
+    expect(content[0]).toMatchObject({
+      type: 'image',
+      source: { type: 'base64', media_type: 'image/png', data: expect.stringMatching(/^iVBOR/) },
+    });
+    expect(content[1]).toEqual({ type: 'text', text: 'Describe the attached image.' });
+  });
+
+  it('reports an unreadable file as a model error', async () => {
+    const s = createApiAnthropicSummarizer({}, { create: async () => response() });
+    const r = await s.describeImage?.({
+      tenantId: 'owner',
+      groupJid: 'g@g.us',
+      system: 'SYS',
+      user: 'x',
+      image: { path: '/nonexistent/photo.png', mimeType: 'image/png' },
+    });
+    expect(r && !r.ok && r.error.tag).toBe('model');
   });
 });

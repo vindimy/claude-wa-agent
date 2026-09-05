@@ -1,7 +1,13 @@
 import { createLogger, err, ok, type Result } from '../shared/index.js';
 import { runCli } from './run-cli.js';
 import { summarizeVia } from './summarize-via.js';
-import type { AdapterOptions, Summarizer, SummarizerError } from './types.js';
+import type {
+  AdapterOptions,
+  Completion,
+  CompletionRequest,
+  Summarizer,
+  SummarizerError,
+} from './types.js';
 
 const log = createLogger('summarizer:cli-claude');
 
@@ -80,11 +86,30 @@ export function claudeArgs(system: string, model: string | undefined): string[] 
   ];
 }
 
+/**
+ * Same headless flags, but with exactly one tool: `Read`, which the CLI uses
+ * to load an image file into the model's context. `--allowedTools` skips the
+ * permission prompt that would otherwise stall a non-interactive run.
+ */
+export function claudeImageArgs(system: string, model: string | undefined): string[] {
+  return claudeArgs(system, model)
+    .map((a, i, all) => (all[i - 1] === '--tools' && a === '' ? 'Read' : a))
+    .concat(['--allowedTools', 'Read']);
+}
+
+export function claudeImagePrompt(user: string, path: string): string {
+  return `Read the image file at ${path} with the Read tool, then answer without mentioning the tool or the path.\n\n${user}`;
+}
+
 export function createClaudeCliSummarizer(opts: AdapterOptions = {}): Summarizer {
   const bin = opts.bin ?? DEFAULT_BIN;
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
-  const complete: Summarizer['complete'] = async (req) => {
+  async function call(
+    req: CompletionRequest,
+    args: string[],
+    stdin: string,
+  ): Promise<Result<Completion, SummarizerError>> {
     log.info(
       {
         tenant_id: req.tenantId,
@@ -95,14 +120,9 @@ export function createClaudeCliSummarizer(opts: AdapterOptions = {}): Summarizer
       },
       'invoking claude',
     );
-    log.debug({ system: req.system, user: req.user }, 'prompt');
+    log.debug({ system: req.system, user: stdin }, 'prompt');
 
-    const run = await runCli({
-      bin,
-      args: claudeArgs(req.system, opts.model),
-      stdin: req.user,
-      timeoutMs,
-    });
+    const run = await runCli({ bin, args, stdin, timeoutMs });
     if (!run.ok) return run;
     log.debug({ stderr: run.value.stderr }, 'claude stderr');
 
@@ -114,11 +134,26 @@ export function createClaudeCliSummarizer(opts: AdapterOptions = {}): Summarizer
       durationMs: run.value.durationMs,
       costUsd: parsed.value.costUsd,
     });
-  };
+  }
+
+  const complete: Summarizer['complete'] = (req) =>
+    call(req, claudeArgs(req.system, opts.model), req.user);
 
   return {
     name: 'cli-claude',
     summarize: (input) => summarizeVia('cli-claude', input, complete),
     complete,
+    describeImage: (req) =>
+      call(
+        {
+          tenantId: req.tenantId,
+          groupJid: req.groupJid,
+          system: req.system,
+          user: req.user,
+          purpose: 'describe',
+        },
+        claudeImageArgs(req.system, opts.model),
+        claudeImagePrompt(req.user, req.image.path),
+      ),
   };
 }

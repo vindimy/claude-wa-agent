@@ -14,6 +14,7 @@ import {
 } from '../config/index.js';
 import { type DashboardHandle, startDashboard } from '../dashboard/index.js';
 import { type DeliveryOutcome, startOutbox } from '../delivery/index.js';
+import { backfillLinks, createEnrichmentWorker } from '../enrich/index.js';
 import { type SessionState, startListener } from '../listener/index.js';
 import {
   askQuestion,
@@ -116,7 +117,10 @@ program
       'starting listener',
     );
     const vaultDir = resolve(process.env.VAULT_DIR ?? config.vault.dir);
-    const scheduler = startScheduler({ tenantId, config, store, vaultDir });
+    // Image and link descriptions run off the ingest path; only groups with
+    // describe_* on ever queue anything, so an idle worker costs a poll.
+    const enrichment = createEnrichmentWorker({ tenantId, config, store, tz: systemTimeZone() });
+    const scheduler = startScheduler({ tenantId, config, store, vaultDir, enrichment });
     const listener = await startListener({
       tenantId,
       config,
@@ -136,10 +140,12 @@ program
       // Re-checked at send time: only groups opted in via config are posted to.
       isGroupPostAllowed: (jid) => resolveGroupConfig(config, jid)?.deliver.group === true,
     });
+    enrichment.start();
 
     const shutdown = async (signal: string) => {
       log.info({ signal }, 'shutting down');
       scheduler.stop();
+      enrichment.stop();
       outbox.stop();
       await dashboard?.stop();
       await listener.stop();
@@ -387,6 +393,59 @@ program
       }
     },
   );
+
+program
+  .command('enrich')
+  .description('describe queued images and links now (the listener does this on its own)')
+  .option(
+    '--backfill-links <group>',
+    'queue link descriptions for stored messages of one group instead of processing',
+  )
+  .option('--since <window>', 'window for --backfill-links (30m, 12h, 2d, 1w or ISO date)', '7d')
+  .action(async (opts: { backfillLinks?: string; since: string }) => {
+    const config = loadConfigOrExit();
+    const store = new Store(dbPath);
+    try {
+      const nowTs = Math.floor(Date.now() / 1000);
+      if (opts.backfillLinks) {
+        const group = findGroup(config, store, opts.backfillLinks);
+        if (!group) {
+          console.error(`Unknown or non-allow-listed group "${opts.backfillLinks}".`);
+          process.exit(1);
+        }
+        const since = parseSince(opts.since, nowTs);
+        if (!since.ok) {
+          console.error(`Bad --since "${opts.since}": use 30m, 12h, 2d, 1w or an ISO date.`);
+          process.exit(1);
+        }
+        const queued = backfillLinks({ tenantId, store, group, sinceTs: since.value, nowTs });
+        console.log(
+          `Queued ${queued} link description${queued === 1 ? '' : 's'} for ${group.name ?? group.jid}. ` +
+            'Run `digest enrich` (or let `digest run` pick them up).',
+        );
+        return;
+      }
+      const worker = createEnrichmentWorker({ tenantId, config, store, tz: systemTimeZone() });
+      let processed = 0;
+      for (;;) {
+        const r = await worker.runOnce();
+        processed += r.processed;
+        if (r.capped) {
+          console.log(
+            `Daily cap of ${config.enrich.max_per_day} model calls reached; the rest wait for midnight.`,
+          );
+          break;
+        }
+        if (r.processed === 0) break;
+      }
+      const counts = store.enrichmentCounts(tenantId, 0);
+      console.log(
+        `Processed ${processed}. Queue: ${counts.queued} queued, ${counts.failed} failed (retries are scheduled by the listener).`,
+      );
+    } finally {
+      store.close();
+    }
+  });
 
 program
   .command('dashboard')

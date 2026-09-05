@@ -2,12 +2,13 @@ import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { migrateLegacyAuthDir, tenantAuthDir, tenantDir } from './tenant.js';
+import { migrateLegacyAuthDir, tenantAuthDir, tenantDir, tenantMediaDir } from './tenant.js';
 
 describe('tenant paths', () => {
   it('nest under data/tenants/<id>', () => {
     expect(tenantDir('/d', 'owner')).toBe('/d/tenants/owner');
     expect(tenantAuthDir('/d', 'acme')).toBe('/d/tenants/acme/auth');
+    expect(tenantMediaDir('/d', 'acme')).toBe('/d/tenants/acme/media');
   });
 });
 

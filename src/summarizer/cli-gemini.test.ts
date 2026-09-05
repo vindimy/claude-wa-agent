@@ -6,9 +6,10 @@ import {
   createGeminiCliSummarizer,
   GEMINI_TMP_PREFIX,
   geminiArgs,
+  geminiImagePrompt,
   parseGeminiOutput,
 } from './cli-gemini.js';
-import { loadFixtureTranscript } from './fixtures.js';
+import { imageRequest, loadFixtureTranscript } from './fixtures.js';
 import type { SummaryInput } from './types.js';
 
 describe('parseGeminiOutput', () => {
@@ -225,5 +226,29 @@ describe.skipIf(!process.env.INTEGRATION)('cli-gemini adapter (INTEGRATION=1)', 
     expect(text.length).toBeGreaterThan(100);
     expect(text.split(/\s+/).length).toBeLessThan(320);
     expect(text).toMatch(/11:30|48|Sept(ember)? 15|Sasha|Саша/);
+  }, 240_000);
+});
+
+describe('cli-gemini describeImage', () => {
+  it('references the file with @ in the prompt', () => {
+    expect(geminiImagePrompt('Describe it.', '/tmp/p.png')).toMatch(
+      /@\/tmp\/p\.png[\s\S]*Describe it\./,
+    );
+  });
+
+  it('surfaces a missing binary as a spawn error', async () => {
+    const s = createGeminiCliSummarizer({ bin: '/nonexistent/gemini' });
+    const r = await s.describeImage?.(imageRequest());
+    expect(r && !r.ok && r.error.tag).toBe('spawn');
+  });
+});
+
+describe.skipIf(!process.env.INTEGRATION)('cli-gemini describeImage (INTEGRATION=1)', () => {
+  it('describes the red square fixture', async () => {
+    const s = createGeminiCliSummarizer({ model: process.env.INTEGRATION_MODEL });
+    const r = await s.describeImage?.(imageRequest());
+    if (!r?.ok) throw new Error(`describeImage failed: ${JSON.stringify(r?.error)}`);
+    console.log(`\n${r.value.text}\n`);
+    expect(r.value.text.toLowerCase()).toMatch(/red|square/);
   }, 240_000);
 });

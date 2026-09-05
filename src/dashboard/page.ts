@@ -192,6 +192,13 @@ export const PAGE_HTML = String.raw`<!doctype html>
     if (status.uptimeS != null) sub.push('Up ' + ago(now - status.uptimeS, now).replace(' ago', ''));
     sub.push('Default summarizer ' + status.defaultSummarizer);
     sub.push('Messages kept ' + status.retentionDays + ' days');
+    if (status.enrichment) {
+      const e = status.enrichment;
+      const parts = [e.doneToday + ' of ' + e.maxPerDay + ' descriptions today'];
+      if (e.queued) parts.push(e.queued + ' queued');
+      if (e.failed) parts.push(e.failed + ' failed');
+      sub.push('Enrichment: ' + parts.join(', '));
+    }
     sub.push('Times in ' + tz);
     if (status.session === 'unknown') sub.push('This is a standalone viewer; the session state lives in the running listener');
     $('status-sub').textContent = sub.join('. ') + '.';

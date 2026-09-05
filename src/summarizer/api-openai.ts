@@ -1,8 +1,11 @@
 import OpenAI from 'openai';
-import { createLogger, err, ok } from '../shared/index.js';
+import { createLogger, err, ok, type Result } from '../shared/index.js';
+import { readImageBase64 } from './image-file.js';
 import { summarizeVia } from './summarize-via.js';
 import {
   type AdapterOptions,
+  type Completion,
+  type CompletionPurpose,
   purposeVerb,
   type Summarizer,
   type SummarizerError,
@@ -69,7 +72,11 @@ export interface ApiOpenAiDeps {
   apiKey?: string;
 }
 
-export function openAiRequest(system: string, user: string, model: string): CreateParams {
+export function openAiRequest(
+  system: string,
+  user: string | OpenAI.Responses.ResponseInput,
+  model: string,
+): CreateParams {
   return {
     model,
     instructions: system,
@@ -78,6 +85,26 @@ export function openAiRequest(system: string, user: string, model: string): Crea
     // One-shot: nothing to resume, no reason to keep the transcript on their side.
     store: false,
   };
+}
+
+/** The text, then the image as a data URL, in one user turn. */
+export function imageInput(
+  image: { data: string; mimeType: string },
+  user: string,
+): OpenAI.Responses.ResponseInput {
+  return [
+    {
+      role: 'user',
+      content: [
+        { type: 'input_text', text: user },
+        {
+          type: 'input_image',
+          image_url: `data:${image.mimeType};base64,${image.data}`,
+          detail: 'auto',
+        },
+      ],
+    },
+  ];
 }
 
 /**
@@ -92,18 +119,24 @@ export function createApiOpenAiSummarizer(
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   let create = deps.create;
 
-  const complete: Summarizer['complete'] = async (req) => {
+  async function call(
+    ctx: { tenantId: string; groupJid: string; purpose: CompletionPurpose },
+    system: string,
+    user: string,
+    input: string | OpenAI.Responses.ResponseInput,
+  ): Promise<Result<Completion, SummarizerError>> {
     log.info(
       {
-        tenant_id: req.tenantId,
-        group: req.groupJid,
-        purpose: req.purpose,
-        chars: req.user.length,
+        tenant_id: ctx.tenantId,
+        group: ctx.groupJid,
+        purpose: ctx.purpose,
+        chars: user.length,
         model,
       },
       'calling the OpenAI API',
     );
-    log.debug({ system: req.system, user: req.user }, 'prompt');
+    log.debug({ system, user }, 'prompt');
+    const req = { ...ctx, system, user };
 
     if (!create) {
       try {
@@ -121,7 +154,7 @@ export function createApiOpenAiSummarizer(
     const started = Date.now();
     let response: OpenAI.Responses.Response;
     try {
-      response = await create(openAiRequest(req.system, req.user, model), { timeout: timeoutMs });
+      response = await create(openAiRequest(req.system, input, model), { timeout: timeoutMs });
     } catch (e) {
       return err(classifyOpenAiError(e, timeoutMs));
     }
@@ -162,12 +195,27 @@ export function createApiOpenAiSummarizer(
       durationMs,
       costUsd: response.usage ? estimateOpenAiCostUsd(response.model, response.usage) : null,
     });
+  }
+
+  const complete: Summarizer['complete'] = (req) => call(req, req.system, req.user, req.user);
+
+  const describeImage: NonNullable<Summarizer['describeImage']> = async (req) => {
+    const image = await readImageBase64(req.image.path);
+    if (!image.ok) return image;
+    const ctx = { tenantId: req.tenantId, groupJid: req.groupJid, purpose: 'describe' as const };
+    return call(
+      ctx,
+      req.system,
+      req.user,
+      imageInput({ data: image.value, mimeType: req.image.mimeType }, req.user),
+    );
   };
 
   return {
     name: 'api-openai',
     summarize: (input) => summarizeVia('api-openai', input, complete),
     complete,
+    describeImage,
   };
 }
 

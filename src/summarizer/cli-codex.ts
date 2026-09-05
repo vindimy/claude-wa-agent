@@ -2,7 +2,13 @@ import { tmpdir } from 'node:os';
 import { createLogger, err, ok, type Result } from '../shared/index.js';
 import { runCli } from './run-cli.js';
 import { summarizeVia } from './summarize-via.js';
-import type { AdapterOptions, Summarizer, SummarizerError } from './types.js';
+import type {
+  AdapterOptions,
+  Completion,
+  CompletionRequest,
+  Summarizer,
+  SummarizerError,
+} from './types.js';
 
 const log = createLogger('summarizer:cli-codex');
 
@@ -94,7 +100,7 @@ export function parseCodexOutput(stdout: string): Result<ParsedCodexOutput, Summ
  * from wherever the agent runs is picked up. Auth still comes from
  * `$CODEX_HOME/auth.json`.
  */
-export function codexArgs(cwd: string, model: string | undefined): string[] {
+export function codexArgs(cwd: string, model: string | undefined, imagePath?: string): string[] {
   return [
     'exec',
     '--json',
@@ -109,6 +115,8 @@ export function codexArgs(cwd: string, model: string | undefined): string[] {
     '-C',
     cwd,
     ...(model ? ['-m', model] : []),
+    // `-i` attaches the file to the prompt as an image.
+    ...(imagePath ? ['-i', imagePath] : []),
     '-',
   ];
 }
@@ -125,7 +133,10 @@ export function createCodexCliSummarizer(opts: AdapterOptions = {}): Summarizer 
   const bin = opts.bin ?? DEFAULT_BIN;
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
-  const complete: Summarizer['complete'] = async (req) => {
+  async function call(
+    req: CompletionRequest,
+    imagePath?: string,
+  ): Promise<Result<Completion, SummarizerError>> {
     log.info(
       {
         tenant_id: req.tenantId,
@@ -141,7 +152,7 @@ export function createCodexCliSummarizer(opts: AdapterOptions = {}): Summarizer 
     const cwd = tmpdir();
     const run = await runCli({
       bin,
-      args: codexArgs(cwd, opts.model),
+      args: codexArgs(cwd, opts.model, imagePath),
       stdin: codexPrompt(req.system, req.user),
       timeoutMs,
       cwd,
@@ -163,11 +174,24 @@ export function createCodexCliSummarizer(opts: AdapterOptions = {}): Summarizer 
       // ChatGPT-plan usage; the CLI reports tokens, not money.
       costUsd: null,
     });
-  };
+  }
+
+  const complete: Summarizer['complete'] = (req) => call(req);
 
   return {
     name: 'cli-codex',
     summarize: (input) => summarizeVia('cli-codex', input, complete),
     complete,
+    describeImage: (req) =>
+      call(
+        {
+          tenantId: req.tenantId,
+          groupJid: req.groupJid,
+          system: req.system,
+          user: req.user,
+          purpose: 'describe',
+        },
+        req.image.path,
+      ),
   };
 }

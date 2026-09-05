@@ -65,3 +65,39 @@ describe('migrations', () => {
     db.close();
   });
 });
+
+describe('migration 005 (enrichment)', () => {
+  it('adds description columns to existing messages and creates the queue table', () => {
+    const db = openDatabase(':memory:', 4);
+    db.prepare(
+      `INSERT INTO messages (tenant_id, group_jid, id, sender_jid, ts, kind, body)
+       VALUES ('owner', 'g1@g.us', 'M1', 's@s.whatsapp.net', 15, 'image', 'caption')`,
+    ).run();
+
+    migrate(db);
+
+    const row = db.prepare('SELECT * FROM messages').get() as Record<string, unknown>;
+    expect(row.media_description).toBeNull();
+    expect(row.links).toBeNull();
+    const cols = (
+      db.prepare('PRAGMA table_info(enrichments)').all() as Array<{ name: string }>
+    ).map((c) => c.name);
+    expect(cols).toEqual(
+      expect.arrayContaining([
+        'tenant_id',
+        'id',
+        'group_jid',
+        'message_id',
+        'kind',
+        'payload',
+        'status',
+        'attempts',
+        'next_attempt_ts',
+        'called_ts',
+        'error',
+        'created_ts',
+        'updated_ts',
+      ]),
+    );
+  });
+});

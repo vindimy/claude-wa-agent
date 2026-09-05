@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { localParts, previousDaily, previousWeekly, tzOffsetMs, zonedToUtcMs } from './time.js';
+import {
+  localParts,
+  nextLocalMidnight,
+  previousDaily,
+  previousWeekly,
+  startOfLocalDay,
+  tzOffsetMs,
+  zonedToUtcMs,
+} from './time.js';
 
 const LA = 'America/Los_Angeles';
 const iso = (ts: number) => new Date(ts * 1000).toISOString();
@@ -55,5 +63,20 @@ describe('time zone helpers', () => {
     expect(iso(previousWeekly('fri', '09:00', LA, now))).toBe('2026-09-04T16:00:00.000Z');
     // Friday 11:00 when now is Friday 10:00 → last week
     expect(iso(previousWeekly('fri', '11:00', LA, now))).toBe('2026-08-28T18:00:00.000Z');
+  });
+});
+
+describe('local day boundaries', () => {
+  // 2026-09-04 23:30 PDT = 2026-09-05 06:30 UTC
+  const nowTs = Date.UTC(2026, 8, 5, 6, 30) / 1000;
+
+  it('startOfLocalDay is the most recent local midnight', () => {
+    expect(startOfLocalDay(nowTs, 'America/Los_Angeles')).toBe(Date.UTC(2026, 8, 4, 7, 0) / 1000);
+    expect(startOfLocalDay(nowTs, 'UTC')).toBe(Date.UTC(2026, 8, 5, 0, 0) / 1000);
+  });
+
+  it('nextLocalMidnight is the following local midnight', () => {
+    expect(nextLocalMidnight(nowTs, 'America/Los_Angeles')).toBe(Date.UTC(2026, 8, 5, 7, 0) / 1000);
+    expect(nextLocalMidnight(nowTs, 'UTC')).toBe(Date.UTC(2026, 8, 6, 0, 0) / 1000);
   });
 });

@@ -175,6 +175,35 @@ describe('scheduler', () => {
     s.stop();
   });
 
+  it('drains pending enrichment for the target group before a /digest, then runs regardless', async () => {
+    seed(store, G2, NOW - 60, 5);
+    const drained: Array<[string, number]> = [];
+    const s = startScheduler({
+      tenantId: 'owner',
+      config,
+      store,
+      vaultDir,
+      tickMs: 3_600_000,
+      now: () => clock,
+      tz: 'UTC',
+      summarizerFactory: fakeFactory,
+      enrichment: {
+        drain: async (groupJid, deadlineMs) => {
+          drained.push([groupJid, deadlineMs]);
+          return 2; // still queued; the digest must not wait for them
+        },
+      },
+    });
+    await s.handleCommand('/digest Family 1d');
+    expect(drained).toEqual([[G2, 30_000]]);
+    expect(store.recentRuns('owner', G2, 0)[0]?.trigger).toBe('command');
+    // scheduled ticks do not drain
+    seed(store, G1, NOW - 600);
+    await s.tick();
+    expect(drained).toHaveLength(1);
+    s.stop();
+  });
+
   it('rejects an unknown adapter or personality in /digest before running', async () => {
     seed(store, G2, NOW - 60, 5);
     const s = start();
@@ -289,6 +318,7 @@ describe('runDigest', () => {
         personality: 'neutral',
         instructions: '',
       },
+      ingest: { media: false, describe_images: false, describe_links: false },
     };
     const base = {
       tenantId: 'owner',
@@ -332,6 +362,7 @@ describe('runDigest', () => {
         personality: 'neutral',
         instructions: '',
       },
+      ingest: { media: false, describe_images: false, describe_links: false },
     };
     const r = await runDigest({
       tenantId: 'owner',

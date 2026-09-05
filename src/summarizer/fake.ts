@@ -47,6 +47,9 @@ export function createFakeSummarizer(): Summarizer {
       });
     },
     async complete(req: CompletionRequest) {
+      if (req.purpose === 'describe') {
+        return ok({ text: '[fake link description]', model: null, durationMs: 0, costUsd: 0 });
+      }
       const question = /^Question: (.*)$/m.exec(req.user)?.[1] ?? '(no question)';
       const transcriptLines = req.user.split('Transcript:\n')[1]?.split('\n').length ?? 0;
       return ok({
@@ -55,6 +58,9 @@ export function createFakeSummarizer(): Summarizer {
         durationMs: 0,
         costUsd: 0,
       });
+    },
+    async describeImage() {
+      return ok({ text: '[fake image description]', model: null, durationMs: 0, costUsd: 0 });
     },
   };
 }

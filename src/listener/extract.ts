@@ -25,16 +25,29 @@ interface ExtractedContent {
   body: string | null;
 }
 
-/** Pull displayable text (or a caption) out of a raw message payload. */
-export function extractContent(m: proto.IMessage | null | undefined): ExtractedContent | null {
-  if (!m) return null;
-  // ephemeral / view-once wrappers carry the real message one level down
-  const inner =
+/** Ephemeral / view-once wrappers carry the real message one level down. */
+function unwrap(m: proto.IMessage): proto.IMessage {
+  return (
     m.ephemeralMessage?.message ??
     m.viewOnceMessage?.message ??
     m.viewOnceMessageV2?.message ??
     m.documentWithCaptionMessage?.message ??
-    m;
+    m
+  );
+}
+
+/** Mime type of an image message (jpeg when unstated); undefined for anything else. */
+export function imageMimeType(m: proto.IMessage | null | undefined): string | undefined {
+  if (!m) return undefined;
+  const image = unwrap(m).imageMessage;
+  if (!image) return undefined;
+  return image.mimetype?.trim() || 'image/jpeg';
+}
+
+/** Pull displayable text (or a caption) out of a raw message payload. */
+export function extractContent(m: proto.IMessage | null | undefined): ExtractedContent | null {
+  if (!m) return null;
+  const inner = unwrap(m);
 
   if (inner.conversation != null) return { kind: 'text', body: inner.conversation };
   if (inner.extendedTextMessage?.text != null)

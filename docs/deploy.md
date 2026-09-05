@@ -498,3 +498,11 @@ edit run `pm2 restart wa-digest` on the host or
 does not remount a rewritten file, see [run.md](run.md#group-configuration)).
 `SUMMARIZER` and `--adapter` need no config change. The new adapter is used
 from the next run.
+
+`SUMMARIZER` also picks the adapter that describes photos and links
+(`enrich.summarizer` in config). Every adapter above except `fake` can see
+images; `cli-claude` and `cli-gemini` do it through their own file-reading
+tools, so a CLI update that changes those flags shows up as `skipped` image
+jobs in the dashboard rather than failed digests. Downloaded photos live under
+`data/tenants/owner/media/` (inside the `./data` mount) only until described,
+unless `ingest.media: true`.

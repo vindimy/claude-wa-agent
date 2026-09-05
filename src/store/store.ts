@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { rmSync } from 'node:fs';
 import type Database from 'better-sqlite3';
 import { openDatabase } from './db.js';
 
@@ -15,9 +16,45 @@ export interface NewMessage {
   body: string | null;
 }
 
+/** One URL found in a message body, with what the enrichment worker learned about it. */
+export interface LinkInfo {
+  url: string;
+  title: string | null;
+  /** Null when the link was not fetched (login-walled host, non-HTML, or a failed fetch). */
+  description: string | null;
+}
+
 export interface MessageRow extends NewMessage {
   editedTs: number | null;
   deleted: boolean;
+  /** Vision-model description of an image message, once produced. */
+  mediaDescription: string | null;
+  links: LinkInfo[];
+}
+
+export type EnrichmentKind = 'image' | 'link';
+export type EnrichmentStatus = 'queued' | 'done' | 'failed' | 'skipped';
+
+export interface NewEnrichment {
+  tenantId: string;
+  /** `<message_id>:image` or `<message_id>:link:<n>`; a re-enqueue is a no-op. */
+  id: string;
+  groupJid: string;
+  messageId: string;
+  kind: EnrichmentKind;
+  /** File path for `image`, the URL for `link`. */
+  payload: string;
+  createdTs: number;
+}
+
+export interface EnrichmentRow extends NewEnrichment {
+  status: EnrichmentStatus;
+  attempts: number;
+  nextAttemptTs: number;
+  /** When the last model call for this job started; drives the daily cap. */
+  calledTs: number | null;
+  error: string | null;
+  updatedTs: number;
 }
 
 export interface GroupUpsert {
@@ -217,6 +254,24 @@ interface RawMessageRow {
   body: string | null;
   edited_ts: number | null;
   deleted: number;
+  media_description: string | null;
+  links: string | null;
+}
+
+interface RawEnrichmentRow {
+  tenant_id: string;
+  id: string;
+  group_jid: string;
+  message_id: string;
+  kind: string;
+  payload: string;
+  status: string;
+  attempts: number;
+  next_attempt_ts: number;
+  called_ts: number | null;
+  error: string | null;
+  created_ts: number;
+  updated_ts: number;
 }
 
 /**
@@ -348,15 +403,197 @@ export class Store {
     return r.n;
   }
 
+  setMediaDescription(tenantId: string, groupJid: string, id: string, text: string): void {
+    this.db
+      .prepare(
+        `UPDATE messages SET media_description = ?
+         WHERE tenant_id = ? AND group_jid = ? AND id = ?`,
+      )
+      .run(text, tenantId, groupJid, id);
+  }
+
+  setLinks(tenantId: string, groupJid: string, id: string, links: LinkInfo[]): void {
+    this.db
+      .prepare('UPDATE messages SET links = ? WHERE tenant_id = ? AND group_jid = ? AND id = ?')
+      .run(JSON.stringify(links), tenantId, groupJid, id);
+  }
+
   /**
-   * Retention: delete this tenant's messages older than `cutoffTs`. Groups,
-   * summaries, runs, and deliveries are kept. Returns the number removed.
+   * Retention: delete this tenant's messages older than `cutoffTs`, along
+   * with their enrichment jobs and any image files those jobs still point at.
+   * Groups, summaries, runs, and deliveries are kept. Returns the number of
+   * messages removed.
    */
-  pruneMessagesBefore(tenantId: string, cutoffTs: number): number {
+  pruneMessagesBefore(
+    tenantId: string,
+    cutoffTs: number,
+    unlink: (path: string) => void = (p) => rmSync(p, { force: true }),
+  ): number {
+    const stale = this.db
+      .prepare(
+        `SELECT e.id, e.kind, e.payload FROM enrichments e
+         JOIN messages m
+           ON m.tenant_id = e.tenant_id AND m.group_jid = e.group_jid AND m.id = e.message_id
+         WHERE e.tenant_id = ? AND m.ts < ?`,
+      )
+      .all(tenantId, cutoffTs) as Array<{ id: string; kind: string; payload: string }>;
+    for (const e of stale) {
+      if (e.kind === 'image') {
+        try {
+          unlink(e.payload);
+        } catch {
+          // a missing file is the goal; anything else is not worth failing retention over
+        }
+      }
+    }
+    const removeJob = this.db.prepare('DELETE FROM enrichments WHERE tenant_id = ? AND id = ?');
+    const removeMessages = this.db.prepare('DELETE FROM messages WHERE tenant_id = ? AND ts < ?');
+    return this.db.transaction(() => {
+      for (const e of stale) removeJob.run(tenantId, e.id);
+      return removeMessages.run(tenantId, cutoffTs).changes;
+    })();
+  }
+
+  // --- enrichment queue ----------------------------------------------------
+
+  /** Queue a description job; the same id queued twice is left as it was. */
+  enqueueEnrichment(e: NewEnrichment): void {
+    this.db
+      .prepare(
+        `INSERT OR IGNORE INTO enrichments (tenant_id, id, group_jid, message_id, kind, payload,
+           status, attempts, next_attempt_ts, called_ts, error, created_ts, updated_ts)
+         VALUES (@tenantId, @id, @groupJid, @messageId, @kind, @payload,
+           'queued', 0, @createdTs, NULL, NULL, @createdTs, @createdTs)`,
+      )
+      .run({ ...e });
+  }
+
+  /** Queued jobs due at `nowTs`, oldest first; optionally only one group's. */
+  claimDueEnrichments(
+    tenantId: string,
+    nowTs: number,
+    limit: number,
+    groupJid?: string,
+  ): EnrichmentRow[] {
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM enrichments
+         WHERE tenant_id = @tenantId AND status = 'queued' AND next_attempt_ts <= @nowTs
+           AND (@groupJid IS NULL OR group_jid = @groupJid)
+         ORDER BY created_ts, id LIMIT @limit`,
+      )
+      .all({ tenantId, nowTs, limit, groupJid: groupJid ?? null }) as RawEnrichmentRow[];
+    return rows.map(toEnrichmentRow);
+  }
+
+  completeEnrichment(tenantId: string, id: string, updatedTs: number): void {
+    this.db
+      .prepare(
+        `UPDATE enrichments SET status = 'done', error = NULL, updated_ts = ?
+         WHERE tenant_id = ? AND id = ?`,
+      )
+      .run(updatedTs, tenantId, id);
+  }
+
+  /**
+   * Record a failed attempt. With `nextAttemptTs` the job stays queued for a
+   * retry at that time; with null it is `failed` for good.
+   */
+  failEnrichment(
+    tenantId: string,
+    id: string,
+    error: string,
+    nextAttemptTs: number | null,
+    updatedTs: number,
+  ): void {
+    this.db
+      .prepare(
+        `UPDATE enrichments SET status = ?, error = ?, attempts = attempts + 1,
+           next_attempt_ts = COALESCE(?, next_attempt_ts), updated_ts = ?
+         WHERE tenant_id = ? AND id = ?`,
+      )
+      .run(
+        nextAttemptTs === null ? 'failed' : 'queued',
+        error,
+        nextAttemptTs,
+        updatedTs,
+        tenantId,
+        id,
+      );
+  }
+
+  /** Give up on a job without counting it as a failure (e.g. adapter cannot see images). */
+  skipEnrichment(tenantId: string, id: string, reason: string, updatedTs: number): void {
+    this.db
+      .prepare(
+        `UPDATE enrichments SET status = 'skipped', error = ?, updated_ts = ?
+         WHERE tenant_id = ? AND id = ?`,
+      )
+      .run(reason, updatedTs, tenantId, id);
+  }
+
+  /** Push a queued job's next attempt out without counting an attempt (daily cap). */
+  deferEnrichment(tenantId: string, id: string, nextAttemptTs: number, updatedTs: number): void {
+    this.db
+      .prepare(
+        `UPDATE enrichments SET next_attempt_ts = ?, updated_ts = ?
+         WHERE tenant_id = ? AND id = ?`,
+      )
+      .run(nextAttemptTs, updatedTs, tenantId, id);
+  }
+
+  /** Note that a model call is being made for this job (counted by the daily cap). */
+  markEnrichmentCalled(tenantId: string, id: string, calledTs: number): void {
+    this.db
+      .prepare('UPDATE enrichments SET called_ts = ? WHERE tenant_id = ? AND id = ?')
+      .run(calledTs, tenantId, id);
+  }
+
+  countEnrichmentCallsSince(tenantId: string, sinceTs: number): number {
     const r = this.db
-      .prepare('DELETE FROM messages WHERE tenant_id = ? AND ts < ?')
-      .run(tenantId, cutoffTs);
-    return r.changes;
+      .prepare('SELECT COUNT(*) AS n FROM enrichments WHERE tenant_id = ? AND called_ts >= ?')
+      .get(tenantId, sinceTs) as { n: number };
+    return r.n;
+  }
+
+  /** Queued jobs for one group, whether or not they are due yet. */
+  pendingEnrichments(tenantId: string, groupJid: string): number {
+    const r = this.db
+      .prepare(
+        `SELECT COUNT(*) AS n FROM enrichments
+         WHERE tenant_id = ? AND group_jid = ? AND status = 'queued'`,
+      )
+      .get(tenantId, groupJid) as { n: number };
+    return r.n;
+  }
+
+  /** Queue health for the dashboard; `done` counts jobs completed at or after `doneSinceTs`. */
+  enrichmentCounts(
+    tenantId: string,
+    doneSinceTs: number,
+  ): { queued: number; failed: number; done: number } {
+    const r = this.db
+      .prepare(
+        `SELECT
+           SUM(status = 'queued') AS queued,
+           SUM(status = 'failed') AS failed,
+           SUM(status = 'done' AND updated_ts >= ?) AS done
+         FROM enrichments WHERE tenant_id = ?`,
+      )
+      .get(doneSinceTs, tenantId) as {
+      queued: number | null;
+      failed: number | null;
+      done: number | null;
+    };
+    return { queued: r.queued ?? 0, failed: r.failed ?? 0, done: r.done ?? 0 };
+  }
+
+  /** Most recently updated jobs for this tenant. */
+  listEnrichments(tenantId: string, limit: number): EnrichmentRow[] {
+    const rows = this.db
+      .prepare('SELECT * FROM enrichments WHERE tenant_id = ? ORDER BY updated_ts DESC, id LIMIT ?')
+      .all(tenantId, limit) as RawEnrichmentRow[];
+    return rows.map(toEnrichmentRow);
   }
 
   /**
@@ -726,5 +963,43 @@ function toMessageRow(r: RawMessageRow): MessageRow {
     body: r.body,
     editedTs: r.edited_ts,
     deleted: r.deleted === 1,
+    mediaDescription: r.media_description,
+    links: parseLinks(r.links),
+  };
+}
+
+function parseLinks(raw: string | null): LinkInfo[] {
+  if (!raw) return [];
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((l): l is Record<string, unknown> => typeof l === 'object' && l !== null)
+      .filter((l) => typeof l.url === 'string')
+      .map((l) => ({
+        url: l.url as string,
+        title: typeof l.title === 'string' ? l.title : null,
+        description: typeof l.description === 'string' ? l.description : null,
+      }));
+  } catch {
+    return [];
+  }
+}
+
+function toEnrichmentRow(r: RawEnrichmentRow): EnrichmentRow {
+  return {
+    tenantId: r.tenant_id,
+    id: r.id,
+    groupJid: r.group_jid,
+    messageId: r.message_id,
+    kind: r.kind as EnrichmentKind,
+    payload: r.payload,
+    status: r.status as EnrichmentStatus,
+    attempts: r.attempts,
+    nextAttemptTs: r.next_attempt_ts,
+    calledTs: r.called_ts,
+    error: r.error,
+    createdTs: r.created_ts,
+    updatedTs: r.updated_ts,
   };
 }

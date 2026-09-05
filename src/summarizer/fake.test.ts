@@ -68,3 +68,29 @@ describe('fake summarizer complete()', () => {
     expect(a.value.costUsd).toBe(0);
   });
 });
+
+describe('fake describeImage', () => {
+  it('returns a fixed description without touching the file', async () => {
+    const r = await createFakeSummarizer().describeImage?.({
+      tenantId: 'owner',
+      groupJid: 'g@g.us',
+      system: 'describe',
+      user: 'what is this',
+      image: { path: '/nonexistent/photo.jpg', mimeType: 'image/jpeg' },
+    });
+    expect(r?.ok && r.value.text).toBe('[fake image description]');
+  });
+});
+
+describe('fake complete for describe', () => {
+  it('returns a fixed link description', async () => {
+    const r = await createFakeSummarizer().complete({
+      tenantId: 'owner',
+      groupJid: 'g@g.us',
+      system: 'describe',
+      user: 'URL: https://x.example',
+      purpose: 'describe',
+    });
+    expect(r.ok && r.value.text).toBe('[fake link description]');
+  });
+});

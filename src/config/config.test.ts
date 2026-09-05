@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { applyDashboardEnv, loadConfig, overrideSummarizer } from './load.js';
-import { allowedJids, configSchema, resolveGroupConfig } from './schema.js';
+import { allowedJids, configSchema, enrichSummarizer, resolveGroupConfig } from './schema.js';
 
 function writeTemp(content: string): string {
   const dir = mkdtempSync(join(tmpdir(), 'wa-digest-config-'));
@@ -187,5 +187,46 @@ describe('dashboard section', () => {
       port: 8787,
     });
     expect(applyDashboardEnv(base, { DASHBOARD_PORT: 'abc' }).dashboard).toEqual(base.dashboard);
+  });
+});
+
+describe('ingest and enrich sections', () => {
+  it('describes nothing by default and caps model calls', () => {
+    const config = configSchema.parse({});
+    expect(config.ingest).toEqual({ media: false, describe_images: false, describe_links: false });
+    expect(config.enrich).toEqual({ summarizer: undefined, max_per_day: 200 });
+  });
+
+  it('merges a sparse per-group ingest override over the global block', () => {
+    const config = configSchema.parse({
+      ingest: { describe_links: true },
+      groups: [{ jid: '1@g.us', ingest: { describe_images: true } }, { jid: '2@g.us' }],
+    });
+    expect(resolveGroupConfig(config, '1@g.us')?.ingest).toEqual({
+      media: false,
+      describe_images: true,
+      describe_links: true,
+    });
+    expect(resolveGroupConfig(config, '2@g.us')?.ingest).toEqual({
+      media: false,
+      describe_images: false,
+      describe_links: true,
+    });
+  });
+
+  it('uses defaults.summarizer for descriptions unless enrich.summarizer is set', () => {
+    const plain = configSchema.parse({ defaults: { summarizer: 'fake' } });
+    expect(enrichSummarizer(plain)).toBe('fake');
+    const pinned = configSchema.parse({
+      defaults: { summarizer: 'fake' },
+      enrich: { summarizer: 'api-google', max_per_day: 10 },
+    });
+    expect(enrichSummarizer(pinned)).toBe('api-google');
+    expect(pinned.enrich.max_per_day).toBe(10);
+  });
+
+  it('SUMMARIZER override also applies to descriptions', () => {
+    const config = configSchema.parse({ enrich: { summarizer: 'cli-codex' } });
+    expect(enrichSummarizer(overrideSummarizer(config, 'api-anthropic'))).toBe('api-anthropic');
   });
 });

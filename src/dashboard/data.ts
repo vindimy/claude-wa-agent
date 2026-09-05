@@ -1,6 +1,11 @@
 import { type Config, type ResolvedGroupConfig, resolveGroupConfig } from '../config/index.js';
 import type { SessionState } from '../listener/index.js';
-import { type DueDecision, describeCadence, type GroupScheduleState } from '../scheduler/index.js';
+import {
+  type DueDecision,
+  describeCadence,
+  type GroupScheduleState,
+  startOfLocalDay,
+} from '../scheduler/index.js';
 import type {
   DeliveryRow,
   QuestionRecord,
@@ -46,12 +51,15 @@ export interface StatusView {
   maxSendsPerDay: number;
   pendingSends: number;
   failedSends: number;
+  /** Image and link description queue; `doneToday` counts the local day. */
+  enrichment: { queued: number; failed: number; doneToday: number; maxPerDay: number };
 }
 
 export function statusView(src: DashboardSource): StatusView {
   const nowMs = (src.now ?? Date.now)();
   const nowTs = Math.floor(nowMs / 1000);
   const unsent = src.store.listDeliveries(src.tenantId, 500, { unsentOnly: true });
+  const enrichment = src.store.enrichmentCounts(src.tenantId, startOfLocalDay(nowTs, src.tz));
   return {
     tenantId: src.tenantId,
     session: src.getSessionState?.() ?? 'unknown',
@@ -66,6 +74,12 @@ export function statusView(src: DashboardSource): StatusView {
     maxSendsPerDay: src.config.limits.max_sends_per_day,
     pendingSends: unsent.filter((d) => d.status === 'queued').length,
     failedSends: unsent.filter((d) => d.status === 'failed').length,
+    enrichment: {
+      queued: enrichment.queued,
+      failed: enrichment.failed,
+      doneToday: enrichment.done,
+      maxPerDay: src.config.enrich.max_per_day,
+    },
   };
 }
 

@@ -13,6 +13,7 @@ export type {
   Completion,
   CompletionPurpose,
   CompletionRequest,
+  ImageRequest,
   Summarizer,
   SummarizerError,
   Summary,
