@@ -12,6 +12,8 @@ export {
   mergeSummary,
   type ResolvedGroupConfig,
   resolveGroupConfig,
+  SUMMARY_LANGUAGES,
+  SUMMARY_STYLES,
   type SummarizerOptions,
   type SummaryOptions,
 } from './schema.js';

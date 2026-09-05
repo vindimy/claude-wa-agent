@@ -164,6 +164,29 @@ describe('scheduler', () => {
     s.stop();
   });
 
+  it('passes /digest options through to the summarizer', async () => {
+    seed(store, G2, NOW - 60, 5);
+    const s = start();
+    await s.handleCommand('/digest Family 1d style=narrative lang=ru via=fake');
+    const queued = store.queuedDeliveries('owner');
+    expect(queued).toHaveLength(1);
+    expect(queued[0]?.text).toContain('· narrative · ru');
+    expect(store.recentRuns('owner', G2, 0)[0]?.adapter).toBe('fake');
+    s.stop();
+  });
+
+  it('rejects an unknown adapter or personality in /digest before running', async () => {
+    seed(store, G2, NOW - 60, 5);
+    const s = start();
+    await s.handleCommand('/digest Family 1d via=nope');
+    expect(store.queuedDeliveries('owner').at(-1)?.text).toMatch(/unknown adapter "nope"/i);
+    await s.handleCommand('/digest Family 1d voice=nobody');
+    expect(store.queuedDeliveries('owner').at(-1)?.text).toMatch(/unknown personality "nobody"/i);
+    expect(store.queuedDeliveries('owner')).toHaveLength(2);
+    expect(store.recentRuns('owner', G2, 0)).toHaveLength(0);
+    s.stop();
+  });
+
   it('answers /ask with a private reply and records the question', async () => {
     seed(store, G2, NOW - 120, 5);
     const s = start();

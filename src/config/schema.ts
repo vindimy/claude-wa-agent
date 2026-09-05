@@ -28,9 +28,12 @@ const deliverShape = {
   vault: z.boolean(),
 };
 
+export const SUMMARY_LANGUAGES = ['auto', 'ru', 'en'] as const;
+export const SUMMARY_STYLES = ['topics', 'narrative', 'action-items'] as const;
+
 const summaryShape = {
-  language: z.enum(['auto', 'ru', 'en']),
-  style: z.enum(['topics', 'narrative', 'action-items']),
+  language: z.enum(SUMMARY_LANGUAGES),
+  style: z.enum(SUMMARY_STYLES),
   max_words: z.number().int().positive(),
   /** A preset name or a key under `personalities:`; checked in configSchema. */
   personality: z.string().trim().min(1),

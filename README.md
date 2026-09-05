@@ -225,10 +225,20 @@ Send these to yourself (the "You" chat in WhatsApp) while `digest run` is up:
 /digest 3d              every group over the last 3 days
 /digest Family          one group since its last digest
 /digest "Zouk team" 12h one group, explicit window
+/digest Family 2d style=narrative lang=ru words=150 voice=dry via=api-openai
+                        same knobs as `digest summarize`; --flags work too
 /ask Family when is the dacha trip?      answer from everything stored
 /ask Family 2w who is bringing the cake? answer from the last two weeks
 /help                   list commands and groups
 ```
+
+`/digest` options mirror the `digest summarize` flags: `style=` (`topics`,
+`narrative`, `action-items`), `lang=` (`en`, `ru`, `auto`), `words=`,
+`voice=` (a preset or a `personalities:` key), `via=` (an adapter name), and
+`note="extra guidance"`. The config.yaml spellings (`language=`, `max_words=`,
+`personality=`, `adapter=`, `instructions=`) and CLI flags (`--style narrative`,
+`--since 2d`) are accepted too. A typo replies with the allowed values and
+nothing runs.
 
 Replies always come back as a self-DM, even for groups with `self_dm: false`,
 and neither `/digest` nor `/ask` ever posts into the group. Only live messages you send are

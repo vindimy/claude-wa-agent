@@ -1,8 +1,16 @@
 import { randomUUID } from 'node:crypto';
 import { parseSince } from '../cli/since.js';
-import { type Config, type ResolvedGroupConfig, resolveGroupConfig } from '../config/index.js';
+import {
+  type Config,
+  personalityNames,
+  type ResolvedGroupConfig,
+  resolveGroupConfig,
+  resolvePersonality,
+  type SummaryOptions,
+} from '../config/index.js';
 import { createLogger } from '../shared/index.js';
 import type { Store } from '../store/index.js';
+import { ADAPTER_NAMES } from '../summarizer/index.js';
 import { askQuestion, describeAskError } from './ask.js';
 import { type DueDecision, decideDue, type GroupScheduleState, windowSince } from './cadence.js';
 import { type DigestCommand, helpText, parseCommand } from './commands.js';
@@ -206,13 +214,37 @@ export function startScheduler(opts: SchedulerOptions): SchedulerHandle {
       if (!parsed.ok) return queueReply(`🤖 Bad window "${cmd.sinceSpec}". Use 12h, 2d, 1w.`);
       since = parsed.value;
     }
-    log.info({ groups: targets.map((g) => g.jid), since: cmd.sinceSpec }, 'owner command');
+    // Check the config-dependent options here so a typo gets a helpful reply
+    // instead of a failed run.
+    const { adapter, personality } = cmd.options;
+    if (adapter !== undefined && !ADAPTER_NAMES.includes(adapter)) {
+      return queueReply(`🤖 Unknown adapter "${adapter}". Available: ${ADAPTER_NAMES.join(', ')}.`);
+    }
+    if (personality !== undefined && resolvePersonality(config, personality) === undefined) {
+      return queueReply(
+        `🤖 Unknown personality "${personality}". Available: ${personalityNames(config).join(', ')}.`,
+      );
+    }
+    const summaryOptions: Partial<SummaryOptions> = {};
+    if (cmd.options.style) summaryOptions.style = cmd.options.style;
+    if (cmd.options.language) summaryOptions.language = cmd.options.language;
+    if (cmd.options.maxWords) summaryOptions.max_words = cmd.options.maxWords;
+    if (personality) summaryOptions.personality = personality;
+    if (cmd.options.instructions) summaryOptions.instructions = cmd.options.instructions;
+    log.info(
+      { groups: targets.map((g) => g.jid), since: cmd.sinceSpec, adapter, options: summaryOptions },
+      'owner command',
+    );
 
     const lines: string[] = [];
     for (const group of targets) {
       const sinceTs =
         since ?? windowSince(group.cadence, store.lastWatermark(tenantId, group.jid), nowTs);
-      const r = await runGroup(group, sinceTs, 'command', { forceSelfDm: true });
+      const r = await runGroup(group, sinceTs, 'command', {
+        forceSelfDm: true,
+        adapter,
+        summaryOptions,
+      });
       if (r === 'empty') lines.push(`${group.name ?? group.jid}: no new messages`);
       else if (r === 'error') lines.push(`${group.name ?? group.jid}: failed, see logs`);
     }

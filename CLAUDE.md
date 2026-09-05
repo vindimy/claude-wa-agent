@@ -126,7 +126,10 @@ guard that tone never alters facts; unknown names fail config validation.
 
 Cadence types: `daily`, `weekly`, `threshold` (N messages or M hours, whichever
 first), `manual` (on-demand only). On-demand trigger for any group: the tenant
-sends `/digest` or `/digest 3d` from their own number in their self-chat.
+sends `/digest` or `/digest 3d` from their own number in their self-chat,
+optionally with the `digest summarize` knobs as `key=value` tokens or
+`--flags` (`/digest Family 2d style=narrative lang=ru words=150 voice=dry
+via=api-openai`); parsing lives in `src/scheduler/commands.ts`.
 `/ask <group> [window] <question>` answers from stored messages (whole
 retention window by default); answers are self-DM only, recorded in
 `questions`, and never move a watermark.
@@ -226,8 +229,8 @@ host and docker profiles simultaneously against the same
    dashboard (`src/dashboard/`). *(shipped, see `docs/adr/0005-*`)*
 9. **`/digest` options in the self-chat**: the same knobs as `digest
    summarize` (window, style, language, max words, personality, adapter) as
-   `key=value` tokens, e.g. `/digest Family 2d style=narrative lang=ru`.
-   GitHub issue #2. *(next)*
+   `key=value` tokens or `--flags`, e.g. `/digest Family 2d style=narrative
+   lang=ru`. GitHub issue #2. *(shipped)*
 10. **Image and link enrichment**: describe photos with a vision-capable
     adapter and fetch links to describe what they point to; descriptions are
     stored on the message row and appear in the transcript. Off by default
@@ -239,7 +242,7 @@ host and docker profiles simultaneously against the same
     issue #5.
 13. Nice-to-have: action-item extraction as its own output.
 
-Phases 9–12 are queued in that order and worked one at a time.
+Phases 10–12 are queued in that order and worked one at a time.
 
 ## Service direction (multi-tenant, BYO account)
 

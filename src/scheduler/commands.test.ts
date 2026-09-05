@@ -8,36 +8,43 @@ describe('parseCommand', () => {
       kind: 'digest',
       groupRef: undefined,
       sinceSpec: undefined,
+      options: {},
     });
     expect(parseCommand('/digest 3d')).toEqual({
       kind: 'digest',
       groupRef: undefined,
       sinceSpec: '3d',
+      options: {},
     });
     expect(parseCommand('/digest Family')).toEqual({
       kind: 'digest',
       groupRef: 'Family',
       sinceSpec: undefined,
+      options: {},
     });
     expect(parseCommand('/digest Family 12h')).toEqual({
       kind: 'digest',
       groupRef: 'Family',
       sinceSpec: '12h',
+      options: {},
     });
     expect(parseCommand('/digest 12h Family')).toEqual({
       kind: 'digest',
       groupRef: 'Family',
       sinceSpec: '12h',
+      options: {},
     });
     expect(parseCommand('  /DIGEST "Zouk team" 2d ')).toEqual({
       kind: 'digest',
       groupRef: 'Zouk team',
       sinceSpec: '2d',
+      options: {},
     });
     expect(parseCommand('/digest Family 2026-09-01')).toEqual({
       kind: 'digest',
       groupRef: 'Family',
       sinceSpec: '2026-09-01',
+      options: {},
     });
   });
 
@@ -52,6 +59,69 @@ describe('parseCommand', () => {
     expect(parseCommand('/help')).toEqual({ kind: 'help' });
     const cfg = configSchema.parse({ groups: [{ jid: '1@g.us', name: 'Family' }] });
     expect(helpText(cfg)).toContain('- Family');
+    expect(helpText(cfg)).toContain('style=');
+  });
+});
+
+describe('parseCommand /digest options', () => {
+  const full = {
+    style: 'narrative',
+    language: 'ru',
+    maxWords: 150,
+    personality: 'grumpy-uncle',
+    adapter: 'api-openai',
+    instructions: 'call out deadlines',
+  };
+
+  it('accepts key=value tokens with short keys', () => {
+    expect(
+      parseCommand(
+        '/digest Family 2d style=narrative lang=ru words=150 voice=grumpy-uncle via=api-openai note="call out deadlines"',
+      ),
+    ).toEqual({ kind: 'digest', groupRef: 'Family', sinceSpec: '2d', options: full });
+  });
+
+  it('accepts the long key names used in config.yaml', () => {
+    expect(
+      parseCommand(
+        "/digest Family 2d style=narrative language=ru max_words=150 personality=grumpy-uncle adapter=api-openai instructions='call out deadlines'",
+      ),
+    ).toEqual({ kind: 'digest', groupRef: 'Family', sinceSpec: '2d', options: full });
+    expect(parseCommand('/digest max-words=80')).toMatchObject({ options: { maxWords: 80 } });
+  });
+
+  it('accepts CLI-style --flags, including --since', () => {
+    expect(
+      parseCommand(
+        '/digest Family --since 2d --style narrative --language ru --max-words 150 --personality grumpy-uncle --adapter api-openai --instructions "call out deadlines"',
+      ),
+    ).toEqual({ kind: 'digest', groupRef: 'Family', sinceSpec: '2d', options: full });
+    expect(parseCommand('/digest --style=action-items --lang=en')).toEqual({
+      kind: 'digest',
+      groupRef: undefined,
+      sinceSpec: undefined,
+      options: { style: 'action-items', language: 'en' },
+    });
+  });
+
+  it('rejects unknown keys and bad values without running anything', () => {
+    expect(parseCommand('/digest Family foo=bar')).toMatchObject({
+      kind: 'invalid',
+      message: expect.stringContaining('foo'),
+    });
+    expect(parseCommand('/digest style=poem')).toMatchObject({
+      kind: 'invalid',
+      message: expect.stringContaining('style'),
+    });
+    expect(parseCommand('/digest lang=klingon')).toMatchObject({ kind: 'invalid' });
+    expect(parseCommand('/digest words=abc')).toMatchObject({ kind: 'invalid' });
+    expect(parseCommand('/digest words=0')).toMatchObject({ kind: 'invalid' });
+    expect(parseCommand('/digest --style')).toMatchObject({
+      kind: 'invalid',
+      message: expect.stringContaining('--style'),
+    });
+    expect(parseCommand('/digest --since')).toMatchObject({ kind: 'invalid' });
+    expect(parseCommand('/digest --bogus 1')).toMatchObject({ kind: 'invalid' });
   });
 });
 

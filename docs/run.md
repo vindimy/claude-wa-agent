@@ -358,12 +358,20 @@ container is up:
 | `/digest 3d` | Every group over the last 3 days |
 | `/digest Family` | One group since its last digest |
 | `/digest "Zouk team" 12h` | One group, explicit window (`30m`, `12h`, `2d`, `1w`, or an ISO date) |
+| `/digest Family 2d style=narrative lang=ru words=150 voice=dry via=api-openai note="flag deadlines"` | One group with the `digest summarize` knobs; `--style narrative --since 2d` works too |
 | `/ask Family when is the dacha trip?` | Answer from everything stored for the group |
 | `/ask Family 2w who is bringing the cake?` | Same, from the last two weeks only |
 | `/help` | The command list and the configured groups |
 
 The group can be its JID, its configured `name` (case-insensitive), or any
-unique substring of the name. Replies come back in the same self-chat
+unique substring of the name. Options accept the short chat keys (`style`,
+`lang`, `words`, `voice`, `via`, `note`), the config.yaml keys (`language`,
+`max_words`, `personality`, `adapter`, `instructions`), or `--flag value`
+like the CLI; `--since` is the window. Values are checked before anything
+runs: an unknown style, language, adapter, or personality replies with the
+allowed list and no digest is produced. A `note=` is appended to the
+configured instructions, and a `voice=` swaps the personality for that run
+only; nothing is written back to config. Replies come back in the same self-chat
 through the outbox, so expect a few seconds of jitter, and a run that takes
 a while (large window, slow adapter) answers when it finishes. A group with
 nothing new replies `<group>: no new messages`. Commands never post into a
