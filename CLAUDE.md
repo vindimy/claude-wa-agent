@@ -224,7 +224,22 @@ host and docker profiles simultaneously against the same
 8. **Q&A and dashboard**: `/ask <group> <question>` and `digest ask` over
    stored history via the adapters' `complete()`; read-only local web
    dashboard (`src/dashboard/`). *(shipped, see `docs/adr/0005-*`)*
-9. Nice-to-have: action-item extraction as its own output.
+9. **`/digest` options in the self-chat**: the same knobs as `digest
+   summarize` (window, style, language, max words, personality, adapter) as
+   `key=value` tokens, e.g. `/digest Family 2d style=narrative lang=ru`.
+   GitHub issue #2. *(next)*
+10. **Image and link enrichment**: describe photos with a vision-capable
+    adapter and fetch links to describe what they point to; descriptions are
+    stored on the message row and appear in the transcript. Off by default
+    (`ingest.describe_images` / `ingest.describe_links`). GitHub issue #3.
+11. **More summary languages**: `pt`, `es`, `zh`, `ja` alongside `en`, `ru`,
+    `auto`. GitHub issue #4.
+12. **Typing indicator**: `composing` presence on the self-chat while a
+    `/digest` or `/ask` reply is being produced. Never in groups. GitHub
+    issue #5.
+13. Nice-to-have: action-item extraction as its own output.
+
+Phases 9–12 are queued in that order and worked one at a time.
 
 ## Service direction (multi-tenant, BYO account)
 
