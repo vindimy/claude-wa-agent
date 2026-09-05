@@ -248,11 +248,12 @@ host and docker profiles simultaneously against the same
 11. **More summary languages**: `pt`, `es`, `zh`, `ja` alongside `en`, `ru`,
     `auto`. GitHub issue #4. *(shipped)*
 12. **Typing indicator**: `composing` presence on the self-chat while a
-    `/digest` or `/ask` reply is being produced. Never in groups. GitHub
-    issue #5.
+    `/digest` or `/ask` reply is being produced (`src/scheduler/typing.ts`,
+    refreshed every 8 s, cleared in `finally`). Never in groups; presence is
+    not a send and skips the outbox and daily cap. GitHub issue #5. *(shipped)*
 13. Nice-to-have: action-item extraction as its own output.
 
-Phase 12 is next.
+Phases 1–12 are shipped; item 13 is unscheduled.
 
 ## Service direction (multi-tenant, BYO account)
 

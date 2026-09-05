@@ -255,6 +255,16 @@ export async function startListener(deps: ListenerDeps): Promise<ListenerHandle>
         return err({ tag: 'send' as const, message: e instanceof Error ? e.message : String(e) });
       }
     },
+    async setComposing(jid, on) {
+      const sock = currentSock;
+      if (state !== 'connected' || !sock) return err({ tag: 'not-connected' as const });
+      try {
+        await sock.sendPresenceUpdate(on ? 'composing' : 'paused', jid);
+        return ok(undefined);
+      } catch (e) {
+        return err({ tag: 'send' as const, message: e instanceof Error ? e.message : String(e) });
+      }
+    },
     async stop() {
       stopped = true;
       if (reconnectTimer) clearTimeout(reconnectTimer);

@@ -8,6 +8,11 @@ export interface Transport {
   /** The tenant's own normalized JID, once connected. */
   selfJid(): string | undefined;
   sendText(jid: string, text: string): Promise<Result<void, SendError>>;
+  /**
+   * Show or clear "typing…" in one chat. A presence update, not a message:
+   * it does not go through the outbox and does not count against the daily cap.
+   */
+  setComposing(jid: string, on: boolean): Promise<Result<void, SendError>>;
 }
 
 export type DeliveryOutcome =

@@ -16,6 +16,7 @@ import { type DueDecision, decideDue, type GroupScheduleState, windowSince } fro
 import { type DigestCommand, helpText, parseCommand } from './commands.js';
 import { type DigestRequest, describeDigestError, runDigest } from './run-digest.js';
 import { systemTimeZone } from './time.js';
+import { type TypingPresence, withTyping } from './typing.js';
 
 export interface SchedulerOptions {
   tenantId: string;
@@ -33,6 +34,11 @@ export interface SchedulerOptions {
    * digest sees them; scheduled runs have hours of slack and do not.
    */
   enrichment?: { drain(groupJid: string, deadlineMs: number): Promise<number> };
+  /**
+   * The WhatsApp session, when one is live. `/digest` and `/ask` show
+   * "typing…" on the self-chat while the model works; scheduled runs never do.
+   */
+  presence?: TypingPresence;
 }
 
 /** How long a `/digest` waits for pending image and link descriptions. */
@@ -246,26 +252,28 @@ export function startScheduler(opts: SchedulerOptions): SchedulerHandle {
     );
 
     const lines: string[] = [];
-    for (const group of targets) {
-      if (opts.enrichment) {
-        const remaining = await opts.enrichment.drain(group.jid, DRAIN_BEFORE_COMMAND_MS);
-        if (remaining > 0) {
-          log.info(
-            { group: group.jid, remaining },
-            'running digest with descriptions still pending',
-          );
+    await withTyping(opts.presence, async () => {
+      for (const group of targets) {
+        if (opts.enrichment) {
+          const remaining = await opts.enrichment.drain(group.jid, DRAIN_BEFORE_COMMAND_MS);
+          if (remaining > 0) {
+            log.info(
+              { group: group.jid, remaining },
+              'running digest with descriptions still pending',
+            );
+          }
         }
+        const sinceTs =
+          since ?? windowSince(group.cadence, store.lastWatermark(tenantId, group.jid), nowTs);
+        const r = await runGroup(group, sinceTs, 'command', {
+          forceSelfDm: true,
+          adapter,
+          summaryOptions,
+        });
+        if (r === 'empty') lines.push(`${group.name ?? group.jid}: no new messages`);
+        else if (r === 'error') lines.push(`${group.name ?? group.jid}: failed, see logs`);
       }
-      const sinceTs =
-        since ?? windowSince(group.cadence, store.lastWatermark(tenantId, group.jid), nowTs);
-      const r = await runGroup(group, sinceTs, 'command', {
-        forceSelfDm: true,
-        adapter,
-        summaryOptions,
-      });
-      if (r === 'empty') lines.push(`${group.name ?? group.jid}: no new messages`);
-      else if (r === 'error') lines.push(`${group.name ?? group.jid}: failed, see logs`);
-    }
+    });
     if (lines.length > 0) queueReply(`🤖 ${lines.join('\n')}`);
   }
 
@@ -282,18 +290,20 @@ export function startScheduler(opts: SchedulerOptions): SchedulerHandle {
     const name = group.name ?? group.jid;
     log.info({ group: group.jid, since: cmd.sinceSpec }, 'owner question');
     const groupTz = 'tz' in group.cadence && group.cadence.tz ? group.cadence.tz : tz;
-    const r = await askQuestion({
-      tenantId,
-      store,
-      config,
-      group,
-      question: cmd.question,
-      sinceTs,
-      untilTs: nowTs,
-      tz: groupTz,
-      now,
-      summarizerFactory: opts.summarizerFactory,
-    });
+    const r = await withTyping(opts.presence, () =>
+      askQuestion({
+        tenantId,
+        store,
+        config,
+        group,
+        question: cmd.question,
+        sinceTs,
+        untilTs: nowTs,
+        tz: groupTz,
+        now,
+        summarizerFactory: opts.summarizerFactory,
+      }),
+    );
     if (!r.ok) {
       log.error({ group: group.jid, error: r.error }, describeAskError(r.error));
       return queueReply(`🤖 ${name}: could not answer (${describeAskError(r.error)})`);

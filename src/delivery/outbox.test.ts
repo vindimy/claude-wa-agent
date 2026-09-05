@@ -14,6 +14,9 @@ function fakeTransport(over: Partial<Transport> = {}) {
       sent.push({ jid, text });
       return ok(undefined);
     },
+    async setComposing() {
+      return ok(undefined);
+    },
     ...over,
   };
   return t;

@@ -371,11 +371,15 @@ like the CLI; `--since` is the window. Values are checked before anything
 runs: an unknown style, language, adapter, or personality replies with the
 allowed list and no digest is produced. A `note=` is appended to the
 configured instructions, and a `voice=` swaps the personality for that run
-only; nothing is written back to config. Replies come back in the same self-chat
-through the outbox, so expect a few seconds of jitter, and a run that takes
-a while (large window, slow adapter) answers when it finishes. A group with
-nothing new replies `<group>: no new messages`. Commands never post into a
-group. Only messages you type live count; history sync is ignored.
+only; nothing is written back to config. While a `/digest` or `/ask` is
+being produced the self-chat shows "typing…", refreshed every 8 s until the
+reply is queued; it clears on failure too. Presence updates are not messages
+and do not count against `limits.max_sends_per_day`. Replies come back in
+the same self-chat through the outbox, so expect a few seconds of jitter,
+and a run that takes a while (large window, slow adapter) answers when it
+finishes. A group with nothing new replies `<group>: no new messages`.
+Commands never post into a group, and the typing indicator is never shown in
+a group. Only messages you type live count; history sync is ignored.
 
 Each `/digest` reply is also written to the vault and recorded as a run
 with trigger `command`, so it advances the watermark like a scheduled run.

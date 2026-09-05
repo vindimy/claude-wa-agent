@@ -204,6 +204,91 @@ describe('scheduler', () => {
     s.stop();
   });
 
+  it('shows typing on the self-chat while a /digest or /ask runs, never in a group', async () => {
+    seed(store, G2, NOW - 60, 5);
+    const calls: Array<{ jid: string; on: boolean }> = [];
+    const presence = {
+      isConnected: () => true,
+      selfJid: () => 'me@s.whatsapp.net',
+      async setComposing(jid: string, on: boolean) {
+        calls.push({ jid, on });
+        return { ok: true as const, value: undefined };
+      },
+    };
+    const s = startScheduler({
+      tenantId: 'owner',
+      config,
+      store,
+      vaultDir,
+      tickMs: 3_600_000,
+      now: () => clock,
+      tz: 'UTC',
+      summarizerFactory: fakeFactory,
+      presence,
+    });
+    await s.handleCommand('/digest Family 1d');
+    expect(calls).toEqual([
+      { jid: 'me@s.whatsapp.net', on: true },
+      { jid: 'me@s.whatsapp.net', on: false },
+    ]);
+    calls.length = 0;
+    await s.handleCommand('/ask Family 1d who wrote the most?');
+    expect(calls).toEqual([
+      { jid: 'me@s.whatsapp.net', on: true },
+      { jid: 'me@s.whatsapp.net', on: false },
+    ]);
+    calls.length = 0;
+    // Replies that need no model call do not flash the indicator.
+    await s.handleCommand('/help');
+    await s.handleCommand('/digest Nope');
+    await s.handleCommand('/digest Family 1d via=nope');
+    expect(calls).toEqual([]);
+    // A scheduled run has nobody waiting.
+    seed(store, G1, NOW - 600);
+    await s.tick();
+    expect(calls).toEqual([]);
+    s.stop();
+  });
+
+  it('clears the typing indicator when the run fails', async () => {
+    seed(store, G2, NOW - 60, 5);
+    const calls: boolean[] = [];
+    const presence = {
+      isConnected: () => true,
+      selfJid: () => 'me@s.whatsapp.net',
+      async setComposing(_jid: string, on: boolean) {
+        calls.push(on);
+        return { ok: true as const, value: undefined };
+      },
+    };
+    const s = startScheduler({
+      tenantId: 'owner',
+      config,
+      store,
+      vaultDir,
+      tickMs: 3_600_000,
+      now: () => clock,
+      tz: 'UTC',
+      summarizerFactory: () => ({
+        ok: true,
+        value: {
+          name: 'boom',
+          async summarize() {
+            return { ok: false as const, error: { tag: 'model' as const, message: 'exploded' } };
+          },
+          async complete() {
+            return { ok: false as const, error: { tag: 'model' as const, message: 'exploded' } };
+          },
+        },
+      }),
+      presence,
+    });
+    await s.handleCommand('/digest Family 1d');
+    expect(calls).toEqual([true, false]);
+    expect(store.queuedDeliveries('owner').at(-1)?.text).toContain('failed');
+    s.stop();
+  });
+
   it('rejects an unknown adapter or personality in /digest before running', async () => {
     seed(store, G2, NOW - 60, 5);
     const s = start();

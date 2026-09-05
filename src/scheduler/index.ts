@@ -42,3 +42,4 @@ export {
   type Weekday,
   zonedToUtcMs,
 } from './time.js';
+export { TYPING_REFRESH_MS, type TypingPresence, withTyping } from './typing.js';

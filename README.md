@@ -167,7 +167,8 @@ and to reply in the language of the question; the group's `personality` and
 `instructions` apply, so context like "Baba is grandma" carries over. Every
 question is recorded in `questions` with cost and status. Answers are private:
 printed by the CLI or queued as a self-DM, never posted into a group, and they
-never move a digest watermark.
+never move a digest watermark. While a `/digest` or `/ask` runs, the self-chat
+shows "typing…" so a slow adapter is not mistaken for a dead agent.
 
 #### Delivery channels
 
@@ -496,7 +497,7 @@ better-sqlite3, zod 4, pino, commander, vitest, biome.
 9. ✅ **`/digest` options in the self-chat** — style, language, length, voice, adapter as `key=value`
 10. ✅ **Image and link enrichment** — photos and links described into the transcript, off by default, capped per day
 11. ✅ **More summary languages** — `pt`, `es`, `zh`, `ja` alongside `en`, `ru`, `auto`
-12. Typing indicator on the self-chat while a reply is produced
+12. ✅ **Typing indicator** — "typing…" on the self-chat while a `/digest` or `/ask` reply is produced, never in a group
 13. Nice-to-have: action-item extraction as its own output
 
 Design decisions are recorded in `docs/adr/`.

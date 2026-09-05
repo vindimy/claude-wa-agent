@@ -15,7 +15,7 @@ import {
 import { type DashboardHandle, startDashboard } from '../dashboard/index.js';
 import { type DeliveryOutcome, startOutbox } from '../delivery/index.js';
 import { backfillLinks, createEnrichmentWorker } from '../enrich/index.js';
-import { type SessionState, startListener } from '../listener/index.js';
+import { type ListenerHandle, type SessionState, startListener } from '../listener/index.js';
 import {
   askQuestion,
   describeAskError,
@@ -25,8 +25,9 @@ import {
   type SchedulerHandle,
   startScheduler,
   systemTimeZone,
+  type TypingPresence,
 } from '../scheduler/index.js';
-import { createLogger, migrateLegacyAuthDir, OWNER_TENANT_ID } from '../shared/index.js';
+import { createLogger, err, migrateLegacyAuthDir, OWNER_TENANT_ID } from '../shared/index.js';
 import { Store } from '../store/index.js';
 import { ADAPTER_NAMES } from '../summarizer/index.js';
 import { parseSince } from './since.js';
@@ -120,8 +121,17 @@ program
     // Image and link descriptions run off the ingest path; only groups with
     // describe_* on ever queue anything, so an idle worker costs a poll.
     const enrichment = createEnrichmentWorker({ tenantId, config, store, tz: systemTimeZone() });
-    const scheduler = startScheduler({ tenantId, config, store, vaultDir, enrichment });
-    const listener = await startListener({
+    // The scheduler starts first (the listener needs its command handler), so
+    // the typing indicator reaches the session through this late-bound proxy.
+    let listener: ListenerHandle | undefined;
+    const presence: TypingPresence = {
+      isConnected: () => listener?.isConnected() ?? false,
+      selfJid: () => listener?.selfJid(),
+      setComposing: (jid, on) =>
+        listener?.setComposing(jid, on) ?? Promise.resolve(err({ tag: 'not-connected' as const })),
+    };
+    const scheduler = startScheduler({ tenantId, config, store, vaultDir, enrichment, presence });
+    listener = await startListener({
       tenantId,
       config,
       store,
