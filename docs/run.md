@@ -374,7 +374,9 @@ configured instructions, and a `voice=` swaps the personality for that run
 only; nothing is written back to config. While a `/digest` or `/ask` is
 being produced the self-chat shows "typing…", refreshed every 8 s until the
 reply is queued; it clears on failure too. Presence updates are not messages
-and do not count against `limits.max_sends_per_day`. Replies come back in
+and do not count against `limits.max_sends_per_day`. They only ever go to the
+self-chat: the listener refuses a `composing` update for a group JID, so
+members never see "typing…" from the owner. Replies come back in
 the same self-chat through the outbox, so expect a few seconds of jitter,
 and a run that takes a while (large window, slow adapter) answers when it
 finishes. A group with nothing new replies `<group>: no new messages`.

@@ -1,4 +1,4 @@
-import type { SendError } from '../delivery/index.js';
+import { isGroupJid, type SendError } from '../delivery/index.js';
 import { createLogger, type Result } from '../shared/index.js';
 
 /**
@@ -28,7 +28,8 @@ export async function withTyping<T>(
   opts: { refreshMs?: number } = {},
 ): Promise<T> {
   const jid = presence?.isConnected() ? presence.selfJid() : undefined;
-  if (!presence || !jid) return work();
+  // Self-chat only. A group JID here would be a bug upstream; never type there.
+  if (!presence || !jid || isGroupJid(jid)) return work();
 
   const set = async (on: boolean) => {
     try {

@@ -170,6 +170,10 @@ host and docker profiles simultaneously against the same
 - Session state (`pairing`, `connected`, `reconnecting`, `phone_offline`,
   `logged_out`) is explicit and surfaced, not inferred from log noise.
 - Every log line carries `tenant_id`.
+- Quiet client: `markOnlineOnConnect: false`, never `readMessages()` or
+  `sendReceipt()` (no blue ticks), typing presence only in the self-chat,
+  and group sends use `cachedGroupMetadata` so a send does not refetch the
+  participant list. `src/listener/quiet.test.ts` enforces this on the source.
 - Logs are JSON lines on stdout. With `LOG_DIR` set (the Docker image uses
   `/app/data/logs`) the same lines also go to rolling files: `app.*` with
   everything and `errors.*` with warn and above, so problems can be read

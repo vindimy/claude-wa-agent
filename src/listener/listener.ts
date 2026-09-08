@@ -14,6 +14,7 @@ import { enqueueEnrichments } from '../enrich/index.js';
 import { createLogger, err, ok, tenantAuthDir, tenantMediaDir } from '../shared/index.js';
 import type { Store } from '../store/index.js';
 import { extractAction, extractContent, imageMimeType, toUnixSeconds } from './extract.js';
+import { createGroupMetadataCache } from './group-cache.js';
 
 const BACKOFF_BASE_MS = 1_000;
 const BACKOFF_CAP_MS = 60_000;
@@ -62,6 +63,8 @@ export async function startListener(deps: ListenerDeps): Promise<ListenerHandle>
   };
   let reconnectTimer: NodeJS.Timeout | undefined;
   let currentSock: ReturnType<typeof makeWASocket> | undefined;
+  // Survives reconnects; refilled from groupFetchAllParticipating on every open.
+  const groupCache = createGroupMetadataCache();
 
   async function connect(): Promise<void> {
     if (stopped) return;
@@ -72,8 +75,26 @@ export async function startListener(deps: ListenerDeps): Promise<ListenerHandle>
       version,
       auth: state,
       logger: baileysLog,
-      // no presence broadcast, no read receipts — we are a quiet observer
+      // Quiet observer: stay "unavailable" so WhatsApp never shows us online.
+      // While unavailable Baileys acks incoming messages as `inactive`, which
+      // is not a read receipt. Read receipts only go out via readMessages(),
+      // which this module never calls (see quiet.test.ts).
       markOnlineOnConnect: false,
+      // Without this every group send fetches the participant list first.
+      // Read-through: a miss fetches once and caches; a fetch failure returns
+      // undefined so Baileys falls back to its own fetch.
+      cachedGroupMetadata: async (jid) => {
+        const hit = groupCache.get(jid);
+        if (hit) return hit;
+        try {
+          const meta = await sock.groupMetadata(jid);
+          groupCache.set(meta);
+          return meta;
+        } catch (e) {
+          log.debug({ jid, err: e }, 'group metadata fetch for cache failed');
+          return undefined;
+        }
+      },
     });
     currentSock = sock;
 
@@ -205,15 +226,23 @@ export async function startListener(deps: ListenerDeps): Promise<ListenerHandle>
     sock.ev.on('groups.update', (updates) => {
       const now = Math.floor(Date.now() / 1000);
       for (const u of updates) {
+        groupCache.merge(u);
         if (!u.id || !allowed.has(u.id)) continue;
         store.upsertGroup({ tenantId, jid: u.id, subject: u.subject ?? null, seenTs: now });
       }
+    });
+
+    sock.ev.on('group-participants.update', ({ id }) => {
+      // The participant list decides who a group send is encrypted for;
+      // drop it and let the next send refetch.
+      groupCache.invalidate(id);
     });
   }
 
   async function syncGroups(sock: ReturnType<typeof makeWASocket>): Promise<void> {
     try {
       const groups = await sock.groupFetchAllParticipating();
+      groupCache.setAll(Object.values(groups));
       const now = Math.floor(Date.now() / 1000);
       let allowedCount = 0;
       for (const g of Object.values(groups)) {
@@ -258,6 +287,9 @@ export async function startListener(deps: ListenerDeps): Promise<ListenerHandle>
     async setComposing(jid, on) {
       const sock = currentSock;
       if (state !== 'connected' || !sock) return err({ tag: 'not-connected' as const });
+      // Typing indicators are for the self-chat only; a group would show
+      // "<owner> is typing…" to every member.
+      if (isJidGroup(jid)) return err({ tag: 'send' as const, message: 'no presence in groups' });
       try {
         await sock.sendPresenceUpdate(on ? 'composing' : 'paused', jid);
         return ok(undefined);

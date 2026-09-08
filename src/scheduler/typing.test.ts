@@ -67,6 +67,12 @@ describe('withTyping', () => {
     expect(anon.calls).toEqual([]);
   });
 
+  it('never types in a group, even if the self JID resolves to one', async () => {
+    const p = fakePresence({ selfJid: () => '120363000000000000@g.us' });
+    expect(await withTyping(p, async () => 'g')).toBe('g');
+    expect(p.calls).toEqual([]);
+  });
+
   it('never fails the work when a presence update fails', async () => {
     const p = fakePresence({
       async setComposing() {
