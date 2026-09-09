@@ -1,335 +1,45 @@
 # CLAUDE.md — WhatsApp Group Digest Agent
 
-## What this is
+Long-running Node/TypeScript agent that listens to allow-listed WhatsApp
+groups through the tenant's own linked account (Baileys), stores messages in
+SQLite, and delivers per-group summaries to a self-DM, a Markdown vault, and
+(opt-in) the group itself. Owner and only tenant today: Dmitriy (`owner`).
+Tenant-keyed from day one so it can become a hosted BYO-account service.
+Optimize for reliability and low operational attention.
 
-A long-running agent that listens to selected WhatsApp groups via the owner's
-personal account (linked device), stores messages locally, and produces
-per-group summaries on a configurable schedule. Summaries are delivered to one
-or more channels: a self-DM on WhatsApp, the source group itself (opt-in only),
-and a local Markdown notes vault.
+## Commands
 
-Owner: Dmitriy, who is the first and currently only *tenant*. Today this runs
-as a single-user agent; it is built tenant-keyed from the start so it can grow
-into a hosted bring-your-own-account service without a rewrite (see "Service
-direction" below). Optimize for reliability and low operational attention.
-Scale comes from the tenant key, not from redesigns.
+- `pnpm test` (vitest, no network needed), `pnpm typecheck`, `pnpm lint`
+- `pnpm digest summarize <group> --since 2d --dry-run` before any live send
 
-## Non-negotiable constraints
+## Hard rules
 
-1. **Listening uses the tenant's own personal account** (today: the owner's)
-   via the WhatsApp multi-device protocol (Baileys). We never operate bot
-   numbers. This is an unofficial client; ban risk is real and stays with the
-   tenant. Behave like a quiet human: no bulk sends, no rapid-fire messages,
-   no message scraping beyond groups explicitly allow-listed for that tenant.
-2. **Never post into a group unless `deliver.group: true` is set for that
-   specific group.** Default is off. A summary posted to the wrong group is the
-   worst failure mode of this project.
-3. **Portable across host + Docker.** Same code runs on a Mac mini (launchd/pm2)
-   and on a VPS (docker compose). No host-specific paths hardcoded; everything
-   via env + config.
-4. **Adapter choice is config, not code.** The owner tenant uses locally
-   authenticated CLIs first (`claude`, `gemini`, `codex`) with API-key adapters
-   as a fallback (`SUMMARIZER=api-anthropic` forces it for every group). Every
-   other tenant uses API-key (`api-*`) adapters only; the CLI adapters are
-   owner-only and never run for another tenant.
-5. **All data stays under our control.** SQLite on disk and notes in a local
-   vault directory for the owner; the service profile keeps the same store on
-   its own volume (object storage for auth/state later). No third-party message
-   storage. No cross-tenant reads, ever.
-6. Groups are multilingual (Russian + English). Summaries are written in
-   English by default (`summary.language: en`); a group config can pin `ru`,
-   `pt`, `es`, `zh`, or `ja`, or set `auto` to preserve the source's language mix.
+1. **Never post into a group unless that group has `deliver.group: true`.**
+   A summary in the wrong group is the worst failure mode of this project.
+2. Listen only through the tenant's personal account, only in allow-listed
+   groups, and behave like a quiet human: no bulk or rapid-fire sends, no
+   read receipts, no presence outside the self-chat.
+3. `tenant_id` on every table, log line, and queue item. No cross-tenant
+   reads. CLI adapters (`cli-*`) run for the owner only; other tenants use
+   `api-*`.
+4. Adapter, cadence, language, and delivery are config, never code.
+5. Same code on the Mac mini (pm2/launchd) and in Docker: paths and secrets
+   come from env and `config.yaml` only.
+6. Data stays under our control: SQLite and vault on disk, nothing sent to
+   third-party storage.
 
-## Architecture
+## Where to look
 
-Single Node/TypeScript process running one supervised Baileys socket per
-tenant. Modules with clear boundaries:
-
-```
-src/
-  listener/     Baileys socket, auth state persistence, message ingestion
-  store/        SQLite (better-sqlite3) — messages, groups, summaries, runs;
-                every table carries tenant_id
-  scheduler/    per-group cron/threshold triggers, on-demand commands
-  summarizer/   adapter interface + implementations (cli-claude, cli-gemini,
-                cli-codex, api-anthropic, api-openai, api-google)
-  delivery/     self-dm, group-post, markdown-vault
-  dashboard/    read-only local web page + JSON endpoints (node:http, no deps)
-  enrich/       image + link descriptions: ingest-time download, queue worker,
-                guarded link fetch (off by default, capped per day)
-  config/       zod-validated config loading (config.yaml + env)
-  cli/          `digest run`, `digest summarize <group> --since`, `digest groups`,
-                `digest ask <group> <question>`, `digest dashboard`, `digest schedule`,
-                `digest enrich [--backfill-links <group>]`
-```
-
-Data flow: `listener → store → scheduler decides → summarizer (adapter) →
-delivery (fan-out) → store records the run`.
-
-### Key design decisions (with reasoning)
-
-- **Baileys over whatsapp-web.js**: speaks the multi-device protocol directly,
-  no headless Chromium, far lighter in Docker.
-- **TypeScript end to end**: the listener is necessarily Node; the "brain" only
-  shells out to CLIs, so a second runtime buys nothing.
-- **SQLite over Postgres**: tenant count of one, single process, append-mostly
-  workload. Every table is keyed by `tenant_id` from its first migration, so a
-  later move to Postgres is a driver swap, not a schema redesign.
-- **Tenant-keyed from day one**: `tenant_id` on every table, log line, and
-  queue item; auth state under `data/tenants/<tenant_id>/`. The single-user
-  path uses the same code with one tenant (`tenant_id = "owner"`), so this is
-  not dead scaffolding.
-- **Summarizer as adapter**: `interface Summarizer { summarize(input); complete(req) }`.
-  CLI adapters spawn the binary in non-interactive mode (e.g. `claude -p`,
-  `gemini -p`, `codex exec`) with the prompt on stdin, parse stdout. API adapters
-  call the vendor SDK. Both return the same `Summary` shape. `complete` sends
-  any system+user prompt through the same backend; `summarize` is the digest
-  prompt on top of it, and `/ask` is the question prompt on top of it.
-- **Scheduler is stateful**: every run is recorded with the message-id
-  watermark, so a restart never double-summarizes or skips a window.
-- **Delivery is idempotent**: a summary has a stable id; each channel records
-  delivery so retries are safe.
-
-## Per-group configuration
-
-`config.yaml` is the source of truth for the owner tenant. When the service
-lands, per-tenant settings move into the store with the **same shape**; the zod
-schema in `config/` stays the single definition of that shape. Example:
-
-```yaml
-defaults:
-  summarizer: cli-claude
-  cadence: { type: daily, at: "08:00", tz: "America/Los_Angeles" }
-  deliver: { self_dm: true, group: false, vault: true }
-  summary:
-    language: en            # en | ru | pt | es | zh | ja | auto
-    style: topics           # topics | narrative | action-items
-    max_words: 300
-    personality: neutral    # preset or a key under personalities:; tone only
-    instructions: "Always call out deadlines."   # plain English; groups append to it
-
-personalities:              # custom voices in plain English, referenced by name
-  grumpy-uncle: "A grumpy but loving uncle who still gets every fact right."
-
-groups:
-  - jid: "1203630XXXXXXXX@g.us"
-    name: "Zouk Atoms team"
-    cadence: { type: threshold, messages: 150, max_hours: 24 }
-    deliver: { group: true }        # explicit opt-in
-  - jid: "1203630YYYYYYYY@g.us"
-    name: "Family"
-    cadence: { type: weekly, day: sun, at: "18:00" }
-    summary: { language: ru, personality: friendly, instructions: "Baba is grandma." }
-```
-
-Personality presets: `neutral`, `dry`, `friendly`, `russian-sarcasm`,
-`executive`, `newsroom`, `butler`, `hype` (`src/config/personalities.ts`).
-Voice and instructions enter the system prompt after the fixed rules with a
-guard that tone never alters facts; unknown names fail config validation.
-
-Cadence types: `daily`, `weekly`, `threshold` (N messages or M hours, whichever
-first), `manual` (on-demand only). On-demand trigger for any group: the tenant
-sends `/digest` or `/digest 3d` from their own number in their self-chat,
-optionally with the `digest summarize` knobs as `key=value` tokens or
-`--flags` (`/digest Family 2d style=narrative lang=ru words=150 voice=dry
-via=api-openai`); parsing lives in `src/scheduler/commands.ts`.
-`/ask <group> [window] <question>` answers from stored messages (whole
-retention window by default); answers are self-DM only, recorded in
-`questions`, and never move a watermark.
-
-`dashboard: { enabled: false, host: 127.0.0.1, port: 8787 }` serves a
-read-only page and `/api/*` JSON from inside `digest run` (env
-`DASHBOARD_PORT` / `DASHBOARD_HOST` override). No auth, so loopback only;
-the page can never send, summarize, or change config.
-
-## Deployment profiles
-
-- **host** (Mac mini, primary): run under pm2 or launchd. CLIs are already
-  authenticated in `~/.claude`, `~/.gemini`, `~/.codex`. WhatsApp auth state
-  in `./data/tenants/<tenant_id>/auth/` (owner: `./data/tenants/owner/auth/`).
-- **docker** (VPS): `docker compose up -d`. Mount `./data`, `./vault`, and
-  `config.yaml`. This is also the service profile: stateless app container(s)
-  plus a persistent volume. The image installs the `claude` CLI; the owner
-  authenticates it headlessly with `CLAUDE_CODE_OAUTH_TOKEN` (from
-  `claude setup-token`) rather than by mounting `~/.claude`, which on macOS
-  holds no credentials (they live in the Keychain). Fallback: `SUMMARIZER=
-  api-anthropic` plus `ANTHROPIC_API_KEY` via env. Details in `docs/deploy.md`.
-
-Only one instance may be linked at a time per tenant auth directory. Never run
-host and docker profiles simultaneously against the same
-`data/tenants/<tenant_id>/auth`.
-
-## Operational rules for the agent
-
-- Sends go through one outbound queue **per tenant** with a minimum 2–5 s
-  jitter between messages and a per-tenant daily cap (config
-  `limits.max_sends_per_day`, default 30). No bursts.
-- On socket disconnect: exponential backoff reconnect; after logout (401),
-  stop that tenant's socket, log loudly, mark the tenant `logged_out`, and wait
-  for re-pairing — never loop on QR generation. Other tenants are unaffected.
-- Session state (`pairing`, `connected`, `reconnecting`, `phone_offline`,
-  `logged_out`) is explicit and surfaced, not inferred from log noise.
-- Every log line carries `tenant_id`.
-- Quiet client: `markOnlineOnConnect: false`, never `readMessages()` or
-  `sendReceipt()` (no blue ticks), typing presence only in the self-chat,
-  and group sends use `cachedGroupMetadata` so a send does not refetch the
-  participant list. `src/listener/quiet.test.ts` enforces this on the source.
-- Logs are JSON lines on stdout. With `LOG_DIR` set (the Docker image uses
-  `/app/data/logs`) the same lines also go to rolling files: `app.*` with
-  everything and `errors.*` with warn and above, so problems can be read
-  without scrolling the console.
-- Media is not downloaded by default (`ingest.media: false`). Captions are stored.
-  With `ingest.describe_images` on for a group, photos are downloaded at
-  ingest, described by `enrich.summarizer` (default: `defaults.summarizer`),
-  and the file is deleted unless `ingest.media` is on. `ingest.describe_links`
-  fetches up to three links per message (10 s, 1 MB, no private addresses,
-  no login-walled hosts) and describes them. Both are capped by
-  `enrich.max_per_day` model calls per local day (default 200).
-- Messages older than `retention.days` (30 by default; 60/90/180 allowed) are
-  deleted hourly. Summaries, runs, and vault notes are never pruned.
-- Message deletions/edits update the store; summaries reflect the latest state.
-- Secrets only via env (`.env` is gitignored). Never commit `data/`.
-
-## Development workflow
-
-- `pnpm dev` — run with hot reload against a real linked session (pair once via
-  QR in terminal).
-- `pnpm test` — vitest. Summarizer adapters are tested against fixture
-  transcripts with a `fake` adapter; real CLI/API calls are behind
-  `INTEGRATION=1`.
-- `pnpm digest summarize <group> --since 2d --dry-run` prints the summary
-  without delivering. Use this constantly; prefer dry runs to live sends.
-- Lint/format: biome. Types must pass `tsc --noEmit` before commit.
-- Keep `docs/adr/` (ADR-lite, one file per decision) updated when changing an
-  architecture choice listed above.
-
-## Coding conventions
-
-- Strict TS, no `any` outside adapter boundaries with third-party payloads.
-- Every module exposes a small typed interface; cross-module imports go through
-  `index.ts` only.
-- Errors are typed (`Result`-style or tagged errors), not thrown strings.
-- Log with pino, structured, one logger per module. Never log message bodies at
-  `info` level; bodies only at `debug` and never in production config.
-
-## Phased plan
-
-1. **Listen + store**: pair device, ingest allow-listed groups into SQLite,
-   `digest groups` lists what it sees. No sends. *(shipped)*
-2. **Summarize on demand**: `fake` and `cli-claude` adapters, `--dry-run` CLI.
-   *(shipped)*
-3. **Tenant retrofit + deliver to self-DM + vault**: phases 1–2 shipped before
-   the service direction was written (`data/auth`, no `tenant_id`). Retrofit
-   them first while the schema is cheap to change: `tenant_id` on `groups` and
-   `messages`, auth under `data/tenants/owner/auth/`, tenant on the logger.
-   Then idempotent delivery and run records, tenant-keyed from the start.
-4. **Scheduler**: daily/weekly/threshold cadences, restart-safe watermarks.
-   *(shipped)*
-5. **Group posting (opt-in)** with send queue and rate limits. Scheduled runs
-   post; on-demand runs (`digest summarize`, `/digest`) stay private unless
-   `--post` is given. *(shipped)*
-6. **Docker profile** on the VPS (doubles as the service profile); headless
-   CLI auth via token or the `api-anthropic` fallback via env. *(shipped)*
-7. **OpenAI and Gemini adapters**: `api-openai` and `api-google` behind the
-   same `Summarizer` interface, keyed by `OPENAI_API_KEY` / `GOOGLE_API_KEY`,
-   configured under `summarizers:` and selectable per group via
-   `summarizer:` like the existing adapters. Tracked in GitHub issue #1.
-   Followed by `cli-gemini` (`gemini -p`) and `cli-codex` (`codex exec`),
-   owner-only like `cli-claude`; headless auth per adapter is in
-   `docs/deploy.md`. *(shipped)*
-8. **Q&A and dashboard**: `/ask <group> <question>` and `digest ask` over
-   stored history via the adapters' `complete()`; read-only local web
-   dashboard (`src/dashboard/`). *(shipped, see `docs/adr/0005-*`)*
-9. **`/digest` options in the self-chat**: the same knobs as `digest
-   summarize` (window, style, language, max words, personality, adapter) as
-   `key=value` tokens or `--flags`, e.g. `/digest Family 2d style=narrative
-   lang=ru`. GitHub issue #2. *(shipped)*
-10. **Image and link enrichment**: describe photos with a vision-capable
-    adapter and fetch links to describe what they point to; descriptions are
-    stored on the message row and appear in the transcript. Off by default
-    (`ingest.describe_images` / `ingest.describe_links`). GitHub issue #3.
-    *(shipped, see `docs/adr/0006-*`)*
-11. **More summary languages**: `pt`, `es`, `zh`, `ja` alongside `en`, `ru`,
-    `auto`. GitHub issue #4. *(shipped)*
-12. **Typing indicator**: `composing` presence on the self-chat while a
-    `/digest` or `/ask` reply is being produced (`src/scheduler/typing.ts`,
-    refreshed every 8 s, cleared in `finally`). Never in groups; presence is
-    not a send and skips the outbox and daily cap. GitHub issue #5. *(shipped)*
-13. Nice-to-have: action-item extraction as its own output.
-
-Phases 1–12 are shipped; item 13 is unscheduled.
-
-## Service direction (multi-tenant, BYO account)
-
-Beyond the single-user agent, the long-term goal is a hosted service where
-each customer links **their own** WhatsApp account to our backend (QR / pairing
-code), and we summarize the groups they already belong to. We never operate
-bot numbers and never read a group a tenant is not a member of.
-
-### Why this direction
-- Meta's official Groups API only covers groups the business itself creates
-  (invite-link, OBA-only). It cannot join existing groups, so it does not fit
-  "summarize the chats you already have."
-- Dedicated bot numbers put ban risk on *our* numbers and scale with SIM cards.
-- BYO account keeps the account risk with the tenant. This is an unofficial
-  client path and a WhatsApp ToS gray zone; the product must say so plainly
-  during onboarding, and the architecture must make a per-tenant logout
-  harmless.
-
-### Architectural consequences (apply from now on)
-- **Tenant is a first-class key.** Every table, every log line, every queue
-  item carries `tenant_id`. No cross-tenant reads, ever. Auth state lives in
-  `data/tenants/<tenant_id>/auth/`, one Baileys socket per tenant, supervised.
-- **Session lifecycle is a product feature, not an error path.** Pairing,
-  reconnect, logout (401), and "phone offline" are explicit states surfaced to
-  the tenant. A logged-out tenant pauses cleanly; nothing else is affected.
-- **Human-like send discipline per tenant** (jitter, daily cap, no bursts) —
-  the queue limits move from global to per-tenant.
-- **Summarizer adapters become API-key based** (`api-*`) for the service;
-  the personal CLI adapters stay owner-only and are never used for tenants.
-- **Data handling**: encrypt auth state and message bodies at rest, tenant-
-  configurable retention (default 30 days for the service), one-click export
-  and delete. Assume EU tenants: GDPR-grade consent to summarize, a privacy
-  policy, and a DPA before any paid tier.
-- **Group posting stays opt-in per group**, signed as an automated digest
-  (e.g. "🤖 auto-digest") so members know it is not the tenant typing.
-- **Deployment**: the Docker profile is the service profile. Stateless app
-  container(s) + persistent volume per tenant now; move to object storage for
-  auth/state when we pass a handful of tenants.
-
-### Not yet
-Billing, web onboarding UI, and admin dashboard are out of scope until the
-single-user agent has run reliably for a month. Do not build multi-tenant
-scaffolding that the single-user path doesn't also use — same code, tenant
-count of one.
-
-## Resolved questions (2026-09-04, see `docs/adr/0003-*`)
-
-- **Unattended use of subscription CLI auth**: acceptable for the owner's
-  personal use only, with this automation never exposed to anyone else
-  (OpenClaw sets the precedent). This is why CLI adapters are owner-only;
-  every other tenant uses `api-*` adapters.
-- **Retention for the owner tenant**: 30 days of messages by default,
-  configurable to 60, 90, or 180 (`retention.days`). Summaries, run records,
-  and vault notes are kept. The scheduler prunes hourly.
-- **Encryption at rest**: not needed now. In Docker the auth state is a
-  read-only mount, and the stored bodies come from groups whose content is
-  already visible to every member. Revisit before the first non-owner tenant.
-
-## Open questions
-
-- None blocking phase 6.
-
-## Agent skills
-
-### Issue tracker
-
-Issues live in GitHub Issues (vindimy/claude-wa-agent) via the `gh` CLI. See `docs/agents/issue-tracker.md`.
-
-### Triage labels
-
-Default vocabulary: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`. See `docs/agents/triage-labels.md`.
-
-### Domain docs
-
-Single-context: `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+- Adding a module, crossing a module boundary, or changing where state
+  lives: `docs/agents/architecture.md`
+- Per-group options, `/digest` and `/ask` parsing, personalities, zod
+  schema: `docs/agents/config.md`
+- Outbox, session states, logging, retention, enrichment, quiet-client
+  rules: `docs/agents/operations.md`
+- Code style, tests, dev loop, ADR upkeep: `docs/agents/conventions.md`
+- Anything touching tenancy, auth state, or the multi-tenant roadmap:
+  `docs/agents/service-direction.md`
+- Recorded decisions: `docs/adr/`. Domain vocabulary: `docs/agents/domain.md`
+- Deploy and day-2 ops: `docs/deploy.md`, `docs/run.md`. Roadmap: `README.md`
+- Issues: GitHub via `gh`, see `docs/agents/issue-tracker.md`; labels in
+  `docs/agents/triage-labels.md`

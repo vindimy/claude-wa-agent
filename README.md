@@ -10,11 +10,11 @@ Self-hosted, all data stays on disk. Built tenant-keyed from the start: today
 it runs with a single tenant (`owner`), so it can grow into a bring-your-own-
 account service later without a rewrite (see `CLAUDE.md` and `docs/adr/`).
 
-> **Project status: phase 4 of 7 (scheduler).** The agent pairs, ingests
+> **Project status: phases 1–12 shipped.** The agent pairs, ingests
 > allow-listed groups into SQLite, summarizes on a daily, weekly, or
-> message-count cadence (or on demand via `/digest` in your own chat), and
-> delivers to your WhatsApp self-chat and a Markdown vault. No
-> outbound messages yet. See [Roadmap](#roadmap).
+> message-count cadence (or on demand via `/digest` in your own chat),
+> answers `/ask` questions, and delivers to your self-chat, a Markdown
+> vault, and (opt-in) the group. See [Roadmap](#roadmap).
 
 ## Why
 
@@ -33,33 +33,13 @@ WhatsApp ──▶ listener ──▶ store (SQLite) ──▶ scheduler ──�
                                                                             └──▶ group (opt-in)
 ```
 
-One Node/TypeScript process, split into modules with typed boundaries:
-
-| Module           | Responsibility                                                         | Status  |
-| ---------------- | ---------------------------------------------------------------------- | ------- |
-| `src/listener/`  | Baileys socket, QR pairing, auth persistence, allow-listed ingestion   | ✅ done |
-| `src/store/`     | SQLite via better-sqlite3: groups, messages (edits, soft deletes)      | ✅ done |
-| `src/config/`    | zod-validated `config.yaml` + env, per-group overrides over defaults   | ✅ done |
-| `src/cli/`       | `digest run`, `digest groups`, `digest summarize`                      | ✅ done |
-| `src/summarizer/`| Adapter interface; `fake`, `cli-claude`, `cli-gemini`, `cli-codex`, `api-anthropic`, `api-openai`, `api-google` | ✅ done |
-| `src/delivery/`  | Idempotent fan-out: self-DM, Markdown vault, and opt-in group post through one outbox | ✅ done |
-| `src/scheduler/` | Daily / weekly / threshold triggers, `/digest` commands, restart-safe watermarks | ✅ done |
-
-Cross-module imports go through each module's `index.ts` only. Errors are
-`Result`-style, not thrown strings. Logging is pino, one logger per module;
-message bodies are never logged above `debug`.
-
-### Key design choices
-
-- **Baileys, not whatsapp-web.js.** Speaks the multi-device protocol directly,
-  no headless Chromium, so it runs light in Docker.
-- **SQLite, not Postgres.** Single user, single process, append-mostly.
-- **Summarizer is an adapter.** CLI adapters shell out to `claude -p` and
-  friends; API adapters call vendor SDKs. Which one runs is config, not code.
-- **Everything is idempotent.** Message redelivery is ignored, runs record a
-  message-id watermark, and each delivery channel records what it sent.
-
-Full constraints, conventions, and reasoning live in [`CLAUDE.md`](CLAUDE.md).
+One Node/TypeScript process, split into modules with typed boundaries. The
+module map, the design decisions and the reasoning behind them, and the
+deployment profiles are in
+[`docs/agents/architecture.md`](docs/agents/architecture.md); the runtime
+rules (outbox limits, session lifecycle, retention) are in
+[`docs/agents/operations.md`](docs/agents/operations.md). Agent-facing
+constraints are in [`CLAUDE.md`](CLAUDE.md).
 
 ## Getting started
 
