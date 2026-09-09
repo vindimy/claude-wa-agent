@@ -390,28 +390,13 @@ the host and Docker profiles against the same directory.
 
 ## Operational behaviour
 
-- **Quiet observer.** No presence broadcast, no read receipts. The only sends
-  are self-DM digests, and they go through one per-tenant outbox with 2–5 s
-  jitter and a rolling 24-hour cap (`limits.max_sends_per_day`, default 30).
-- **Reconnects** use exponential backoff with jitter, capped at 60 s.
-- **Session state is explicit**: `connecting → pairing → connected`, with
-  `reconnecting` and `logged_out` logged as transitions.
-- **Logout (401)** stops that tenant's socket and logs at `fatal`. It never
-  loops on QR generation. To re-pair: stop the process, delete
-  `data/tenants/owner/auth/`, run again.
-- **Edits and deletions** update the stored message, so future summaries reflect
-  the latest state.
-- **Photos and links** are described only for groups that opt in
-  (`ingest.describe_images`, `ingest.describe_links`). Photos are downloaded
-  at ingest and the file is deleted once described unless `ingest.media` is
-  on. Links are fetched with a 10 s timeout and a 1 MB cap, never from
-  private or loopback addresses, and never from login-walled hosts
-  (Instagram, Facebook, X, TikTok, LinkedIn). Descriptions cost one model
-  call each, capped by `enrich.max_per_day` per local day; the transcript
-  shows `[photo: …]` and `(link: …)`.
-
 This uses an unofficial client on a personal account. Ban risk is real; the
-agent is built to behave like a human who is simply present in the group.
+agent is built to behave like a human who is simply present in the group:
+no presence broadcast, no read receipts, and the few sends it makes go
+through a per-tenant outbox with jitter and a daily cap. The full rules
+(send limits, session lifecycle and re-pairing, edits and deletions, photo
+and link enrichment, logging, retention) are in
+[`docs/agents/operations.md`](docs/agents/operations.md).
 
 ## Deployment
 
