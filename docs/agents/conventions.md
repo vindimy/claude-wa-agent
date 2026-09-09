@@ -14,6 +14,8 @@
 
 ## Workflow
 
+- Node 22, pinned in `.nvmrc` (CI reads it; the Dockerfile pins the same
+  major). The pino-roll logger test times out on newer Node.
 - `pnpm dev` runs with hot reload against a real linked session (pair once
   via QR in the terminal). Never leave it running alongside pm2 or the
   container: it is a second linked instance.
