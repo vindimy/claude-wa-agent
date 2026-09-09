@@ -15,7 +15,11 @@
 ## Workflow
 
 - Node 22, pinned in `.nvmrc` (CI reads it; the Dockerfile pins the same
-  major). The pino-roll logger test times out on newer Node.
+  major).
+- If the checkout lives in Dropbox, keep `node_modules` out of sync:
+  `xattr -w com.dropbox.ignored 1 node_modules` after `pnpm install`.
+  Evicted (online-only) files make `require` block, which shows up as the
+  pino-roll logger test timing out.
 - `pnpm dev` runs with hot reload against a real linked session (pair once
   via QR in the terminal). Never leave it running alongside pm2 or the
   container: it is a second linked instance.
