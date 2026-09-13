@@ -1,4 +1,11 @@
 import { z } from 'zod';
+import {
+  type DestinationConfig,
+  destinationSchema,
+  groupJid,
+  type ResolvedDestination,
+  resolveDestination,
+} from './destinations.js';
 import { PERSONALITY_PRESETS } from './personalities.js';
 
 const timeOfDay = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'expected HH:MM');
@@ -22,10 +29,14 @@ export const cadenceSchema = z.discriminatedUnion('type', [
 // Bare shapes without defaults: per-group overrides must stay sparse so they
 // only shadow the keys the user actually wrote (a defaulted schema would fill
 // every key and clobber `defaults`).
+const destinationName = z.string().trim().min(1);
+
 const deliverShape = {
   self_dm: z.boolean(),
   group: z.boolean(),
   vault: z.boolean(),
+  /** Names under `destinations:`; outward, so gated like `group`. */
+  to: z.array(destinationName),
 };
 
 export const SUMMARY_LANGUAGES = ['auto', 'en', 'ru', 'pt', 'es', 'zh', 'ja'] as const;
@@ -45,6 +56,7 @@ export const deliverSchema = z.object({
   self_dm: deliverShape.self_dm.default(true),
   group: deliverShape.group.default(false),
   vault: deliverShape.vault.default(true),
+  to: deliverShape.to.default([]),
 });
 
 export const summarySchema = z.object({
@@ -81,14 +93,16 @@ const defaultsSchema = z
     deliver: deliverSchema.prefault({}),
     summary: summarySchema.prefault({}),
   })
-  // Posting into a group is opt-in per group, never global: a summary in the
+  // Outward delivery is opt-in per scope, never global: a summary in the
   // wrong group is the worst failure mode of this project.
   .refine((d) => d.deliver.group === false, {
     message: 'defaults.deliver.group cannot be true; set deliver.group per group instead',
     path: ['deliver', 'group'],
+  })
+  .refine((d) => d.deliver.to.length === 0, {
+    message: 'defaults.deliver.to cannot be set; set deliver.to per group or per recap instead',
+    path: ['deliver', 'to'],
   });
-
-const groupJid = z.string().regex(/@g\.us$/, 'expected a group JID ending in @g.us');
 
 export const groupConfigSchema = z.object({
   jid: groupJid,
@@ -117,6 +131,7 @@ export const configSchema = z
   .object({
     defaults: defaultsSchema.prefault({}),
     personalities: personalitiesSchema.default({}),
+    destinations: z.record(destinationName, destinationSchema).default({}),
     retention: z.object({ days: retentionDays.default(30) }).prefault({}),
     summarizers: z.record(z.string(), summarizerOptionsSchema).default({}),
     vault: z.object({ dir: z.string().default('./vault') }).prefault({}),
@@ -166,6 +181,19 @@ export const configSchema = z
     config.groups.forEach((g, i) => {
       const p = g.summary?.personality;
       if (p !== undefined && !known(p)) complain(p, ['groups', i, 'summary', 'personality']);
+    });
+    const complainDestination = (name: string, path: (string | number)[]) =>
+      ctx.addIssue({
+        code: 'custom',
+        path,
+        message: `unknown destination "${name}"; add it under destinations: (known: ${Object.keys(config.destinations).join(', ') || 'none'})`,
+      });
+    config.groups.forEach((g, i) => {
+      g.deliver?.to?.forEach((name, j) => {
+        if (!Object.hasOwn(config.destinations, name)) {
+          complainDestination(name, ['groups', i, 'deliver', 'to', j]);
+        }
+      });
     });
   });
 
@@ -234,3 +262,16 @@ export function joinInstructions(...parts: (string | undefined)[]): string {
 export function allowedJids(config: Config): Set<string> {
   return new Set(config.groups.map((g) => g.jid));
 }
+
+/**
+ * Resolved outward targets for a scope (a group JID, or `recap:<name>` once
+ * recaps exist). Empty for an unknown scope: the caller never guesses.
+ */
+export function resolveScopeDestinations(config: Config, scopeKey: string): ResolvedDestination[] {
+  const names = resolveGroupConfig(config, scopeKey)?.deliver.to ?? [];
+  return names
+    .map((name) => resolveDestination(config.destinations, name))
+    .filter((d): d is ResolvedDestination => d !== undefined);
+}
+
+export type { DestinationConfig, ResolvedDestination };

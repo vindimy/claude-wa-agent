@@ -3,7 +3,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { applyDashboardEnv, loadConfig, overrideSummarizer } from './load.js';
-import { allowedJids, configSchema, enrichSummarizer, resolveGroupConfig } from './schema.js';
+import {
+  allowedJids,
+  configSchema,
+  enrichSummarizer,
+  resolveGroupConfig,
+  resolveScopeDestinations,
+} from './schema.js';
 
 function writeTemp(content: string): string {
   const dir = mkdtempSync(join(tmpdir(), 'wa-digest-config-'));
@@ -17,7 +23,7 @@ describe('configSchema', () => {
     const config = configSchema.parse({});
     expect(config.defaults.summarizer).toBe('cli-claude');
     expect(config.defaults.cadence).toEqual({ type: 'daily', at: '08:00' });
-    expect(config.defaults.deliver).toEqual({ self_dm: true, group: false, vault: true });
+    expect(config.defaults.deliver).toEqual({ self_dm: true, group: false, vault: true, to: [] });
     expect(config.defaults.summary).toEqual({
       language: 'en',
       style: 'topics',
@@ -78,6 +84,51 @@ describe('configSchema', () => {
     });
     expect(result.success).toBe(false);
   });
+
+  it('accepts destinations and per-group deliver.to', () => {
+    const config = configSchema.parse({
+      destinations: { hub: { group: '9@g.us' }, me: { number: '+13105551234' } },
+      groups: [{ jid: '1@g.us', deliver: { to: ['hub', 'me'] } }],
+    });
+    expect(config.defaults.deliver.to).toEqual([]);
+    expect(resolveGroupConfig(config, '1@g.us')?.deliver.to).toEqual(['hub', 'me']);
+  });
+
+  it('refuses a global deliver.to', () => {
+    const result = configSchema.safeParse({
+      destinations: { hub: { group: '9@g.us' } },
+      defaults: { deliver: { to: ['hub'] } },
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error.issues[0]?.message).toContain('per group');
+  });
+
+  it('rejects an unknown destination name on a group', () => {
+    const result = configSchema.safeParse({
+      destinations: { hub: { group: '9@g.us' } },
+      groups: [{ jid: '1@g.us', deliver: { to: ['hubb'] } }],
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues[0]?.message).toContain('unknown destination "hubb"');
+      expect(result.error.issues[0]?.path).toEqual(['groups', 0, 'deliver', 'to', 0]);
+    }
+  });
+});
+
+describe('resolveScopeDestinations', () => {
+  it('resolves a group scope to its destinations in config order', () => {
+    const config = configSchema.parse({
+      destinations: { hub: { group: '9@g.us' }, me: { number: '+13105551234' } },
+      groups: [{ jid: '1@g.us', deliver: { to: ['me', 'hub'] } }, { jid: '2@g.us' }],
+    });
+    expect(resolveScopeDestinations(config, '1@g.us')).toEqual([
+      { name: 'me', kind: 'number', jid: '13105551234@s.whatsapp.net' },
+      { name: 'hub', kind: 'group', jid: '9@g.us' },
+    ]);
+    expect(resolveScopeDestinations(config, '2@g.us')).toEqual([]);
+    expect(resolveScopeDestinations(config, 'unknown@g.us')).toEqual([]);
+  });
 });
 
 describe('resolveGroupConfig', () => {
@@ -98,7 +149,7 @@ describe('resolveGroupConfig', () => {
 
   it('keeps defaults where the group has no override', () => {
     const resolved = resolveGroupConfig(config, '2@g.us');
-    expect(resolved?.deliver).toEqual({ self_dm: true, group: true, vault: true });
+    expect(resolved?.deliver).toEqual({ self_dm: true, group: true, vault: true, to: [] });
     expect(resolved?.summarizer).toBe('cli-claude');
   });
 

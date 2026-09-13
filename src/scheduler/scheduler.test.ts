@@ -395,7 +395,7 @@ describe('runDigest', () => {
       name: 'Team',
       summarizer: 'fake',
       cadence: { type: 'manual' as const },
-      deliver: { self_dm: false, group: true, vault: false },
+      deliver: { self_dm: false, group: true, vault: false, to: [] },
       summary: {
         language: 'auto' as const,
         style: 'topics' as const,
@@ -439,7 +439,7 @@ describe('runDigest', () => {
       name: 'Team',
       summarizer: 'cli-claude',
       cadence: { type: 'manual' as const },
-      deliver: { self_dm: true, group: false, vault: true },
+      deliver: { self_dm: true, group: false, vault: true, to: [] },
       summary: {
         language: 'auto' as const,
         style: 'topics' as const,

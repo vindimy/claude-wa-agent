@@ -28,7 +28,7 @@ describe('deliverSummary', () => {
     vaultDir = mkdtempSync(join(tmpdir(), 'vault-'));
   });
 
-  const run = (deliver = { self_dm: true, vault: true, group: false }) =>
+  const run = (deliver = { self_dm: true, vault: true, group: false, to: [] }) =>
     deliverSummary({
       store,
       summary,
@@ -74,7 +74,7 @@ describe('deliverSummary', () => {
     const outcomes = deliverSummary({
       store,
       summary: { ...summary, text: 'regenerated' },
-      deliver: { self_dm: true, vault: true, group: false },
+      deliver: { self_dm: true, vault: true, group: false, to: [] },
       vaultDir,
       render: { groupName: 'Team', tz: 'UTC' },
       nowTs: 9,
@@ -88,7 +88,7 @@ describe('deliverSummary', () => {
   });
 
   it('queues a signed group post addressed to the source group', () => {
-    const outcomes = run({ self_dm: false, vault: false, group: true });
+    const outcomes = run({ self_dm: false, vault: false, group: true, to: [] });
     expect(outcomes).toEqual([
       { channel: 'group', outcome: 'queued', target: '120363000000000001@g.us' },
     ]);
@@ -100,9 +100,9 @@ describe('deliverSummary', () => {
   });
 
   it('does not queue a second group post for the same summary', () => {
-    run({ self_dm: false, vault: false, group: true });
+    run({ self_dm: false, vault: false, group: true, to: [] });
     store.markDeliverySent('owner', 'abc', 'group', '120363000000000001@g.us', 7);
-    expect(run({ self_dm: false, vault: false, group: true })).toEqual([
+    expect(run({ self_dm: false, vault: false, group: true, to: [] })).toEqual([
       { channel: 'group', outcome: 'already', status: 'sent' },
     ]);
   });
@@ -111,7 +111,7 @@ describe('deliverSummary', () => {
     const outcomes = deliverSummary({
       store,
       summary: { ...summary, groupJid: '15551234567@s.whatsapp.net' },
-      deliver: { self_dm: false, vault: false, group: true },
+      deliver: { self_dm: false, vault: false, group: true, to: [] },
       vaultDir,
       render: { groupName: 'Team', tz: 'UTC' },
       nowTs: 1,
@@ -124,7 +124,7 @@ describe('deliverSummary', () => {
     const outcomes = deliverSummary({
       store,
       summary,
-      deliver: { self_dm: false, vault: true, group: false },
+      deliver: { self_dm: false, vault: true, group: false, to: [] },
       vaultDir: '/dev/null/notadir',
       render: { groupName: 'Team', tz: 'UTC' },
       nowTs: 1,
