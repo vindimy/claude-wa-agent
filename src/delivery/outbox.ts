@@ -94,7 +94,7 @@ export function startOutbox(opts: OutboxOptions): OutboxHandle {
 
   function heldUntil(row: DeliveryRow, nowS: number): number | undefined {
     if (row.channel !== 'group' || !row.target || minGroupPostGapMs <= 0) return undefined;
-    const last = store.lastSentTs(tenantId, 'group', row.target);
+    const last = store.lastSentToTarget(tenantId, row.target);
     if (last === undefined) return undefined;
     const until = last + Math.ceil(minGroupPostGapMs / 1000);
     return until > nowS ? until : undefined;

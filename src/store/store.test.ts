@@ -3,6 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
+  destinationChannel,
+  destinationName,
   type NewEnrichment,
   type NewMessage,
   type QuestionRecord,
@@ -296,10 +298,47 @@ describe('Store: summaries, runs, deliveries', () => {
       target: 'g1@g.us',
       createdTs: 1,
     });
-    expect(store.lastSentTs(T, 'group', 'g1@g.us')).toBe(300);
-    expect(store.lastSentTs(T, 'group', 'g2@g.us')).toBe(900);
-    expect(store.lastSentTs(T, 'group', 'g3@g.us')).toBeUndefined();
-    expect(store.lastSentTs(T, 'self_dm', 'g1@g.us')).toBeUndefined();
+    store.putDelivery({
+      tenantId: T,
+      summaryId: 'z',
+      channel: 'to:me',
+      status: 'sent',
+      target: '13105551234@s.whatsapp.net',
+      createdTs: 1,
+      sentTs: 700,
+    });
+    expect(store.lastSentToTarget(T, 'g1@g.us')).toBe(300);
+    expect(store.lastSentToTarget(T, 'g2@g.us')).toBe(900);
+    expect(store.lastSentToTarget(T, '13105551234@s.whatsapp.net')).toBe(700);
+    expect(store.lastSentToTarget(T, 'g3@g.us')).toBeUndefined();
+  });
+
+  it('counts destination sends against the daily cap', () => {
+    store.putDelivery({
+      tenantId: T,
+      summaryId: 'a',
+      channel: 'to:hub',
+      status: 'sent',
+      target: 'g9@g.us',
+      createdTs: 1,
+      sentTs: 50,
+    });
+    store.putDelivery({
+      tenantId: T,
+      summaryId: 'a',
+      channel: 'vault',
+      status: 'sent',
+      target: '/tmp/x.md',
+      createdTs: 1,
+      sentTs: 50,
+    });
+    expect(store.countSentSince(T, 0)).toBe(1);
+  });
+
+  it('maps destination names to channels and back', () => {
+    expect(destinationChannel('hub')).toBe('to:hub');
+    expect(destinationName('to:hub')).toBe('hub');
+    expect(destinationName('group')).toBeUndefined();
   });
 });
 

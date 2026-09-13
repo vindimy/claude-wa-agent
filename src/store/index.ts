@@ -3,6 +3,8 @@ export {
   type DeliveryChannel,
   type DeliveryRow,
   type DeliveryStatus,
+  destinationChannel,
+  destinationName,
   type EnrichmentKind,
   type EnrichmentRow,
   type EnrichmentStatus,

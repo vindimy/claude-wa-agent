@@ -78,8 +78,18 @@ export interface GroupRow {
 
 export type RunTrigger = 'manual' | 'command' | 'daily' | 'weekly' | 'threshold';
 export type RunStatus = 'ok' | 'error' | 'empty';
-export type DeliveryChannel = 'self_dm' | 'vault' | 'group';
+/** `to:<name>` is one row per named destination; see `destinationChannel`. */
+export type DeliveryChannel = 'self_dm' | 'vault' | 'group' | `to:${string}`;
 export type DeliveryStatus = 'queued' | 'sent' | 'failed';
+
+export function destinationChannel(name: string): DeliveryChannel {
+  return `to:${name}`;
+}
+
+/** The destination name of a `to:<name>` channel, or undefined for any other channel. */
+export function destinationName(channel: string): string | undefined {
+  return channel.startsWith('to:') ? channel.slice(3) : undefined;
+}
 
 export interface SummaryRecord {
   tenantId: string;
@@ -904,24 +914,24 @@ export class Store {
       .run(permanent ? 'failed' : 'queued', error, tenantId, summaryId, channel);
   }
 
-  /** When this tenant last sent on `channel` to `target`, if ever. */
-  lastSentTs(tenantId: string, channel: DeliveryChannel, target: string): number | undefined {
+  /** When this tenant last sent anything to `target` (any WhatsApp channel), if ever. */
+  lastSentToTarget(tenantId: string, target: string): number | undefined {
     const r = this.db
       .prepare(
         `SELECT MAX(sent_ts) AS ts FROM deliveries
-         WHERE tenant_id = ? AND channel = ? AND target = ? AND status = 'sent'`,
+         WHERE tenant_id = ? AND target = ? AND status = 'sent' AND channel != 'vault'`,
       )
-      .get(tenantId, channel, target) as { ts: number | null };
+      .get(tenantId, target) as { ts: number | null };
     return r.ts ?? undefined;
   }
 
-  /** WhatsApp sends (self_dm + group) marked sent at or after `sinceTs`. */
+  /** WhatsApp sends (self_dm, group, and destination rows) marked sent at or after `sinceTs`. */
   countSentSince(tenantId: string, sinceTs: number): number {
     const r = this.db
       .prepare(
         `SELECT COUNT(*) AS n FROM deliveries
-         WHERE tenant_id = ? AND status = 'sent' AND channel IN ('self_dm', 'group')
-           AND sent_ts >= ?`,
+         WHERE tenant_id = ? AND status = 'sent' AND sent_ts >= ?
+           AND (channel IN ('self_dm', 'group') OR channel LIKE 'to:%')`,
       )
       .get(tenantId, sinceTs) as { n: number };
     return r.n;
