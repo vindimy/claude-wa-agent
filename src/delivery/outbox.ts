@@ -1,7 +1,10 @@
 import { createLogger } from '../shared/index.js';
-import type { DeliveryRow, Store } from '../store/index.js';
+import { type DeliveryRow, destinationName, type Store } from '../store/index.js';
 import { isGroupJid } from './deliver.js';
 import type { Transport } from './types.js';
+
+/** A group or a user JID; the only two things a destination may resolve to. */
+const OUTWARD_TARGET_RE = /^\d+@(g\.us|s\.whatsapp\.net)$/;
 
 export interface OutboxOptions {
   tenantId: string;
@@ -14,6 +17,12 @@ export interface OutboxOptions {
    * "never", so an outbox without it drops every group row.
    */
   isGroupPostAllowed?: (groupJid: string) => boolean;
+  /**
+   * Send-time check that `scopeKey` (a group JID or `recap:<name>`) still
+   * lists destination `name` and that `name` still resolves to `target`.
+   * Defaults to "never", so an outbox without it drops every destination row.
+   */
+  isDestinationAllowed?: (scopeKey: string, name: string, target: string) => boolean;
   /** Minimum spacing between two posts into the same group. */
   minGroupPostGapMs?: number;
   pollMs?: number;
@@ -48,10 +57,11 @@ const DAY_S = 86_400;
  * survive restarts, so a send that never happened is retried, and a send that
  * happened is never repeated.
  *
- * Group rows are the one channel that can reach other people, so they get an
- * extra gate here: the target must be a group JID that is opted in *at send
- * time*, and two posts into the same group are spaced by `minGroupPostGapMs`.
- * A held group row does not block self-DMs queued behind it.
+ * Group and destination rows are the channels that can reach other people, so
+ * they get an extra gate here: the target must be a group JID that is opted
+ * in *at send time* (or, for a destination, still listed and resolving to
+ * the same target), and two posts to the same target are spaced by
+ * `minGroupPostGapMs`. A held row does not block self-DMs queued behind it.
  */
 export function startOutbox(opts: OutboxOptions): OutboxHandle {
   const {
@@ -60,6 +70,7 @@ export function startOutbox(opts: OutboxOptions): OutboxHandle {
     transport,
     maxSendsPerDay,
     isGroupPostAllowed = () => false,
+    isDestinationAllowed = () => false,
     minGroupPostGapMs = 3_600_000,
     pollMs = 5_000,
     jitterMs = [2_000, 5_000],
@@ -76,7 +87,9 @@ export function startOutbox(opts: OutboxOptions): OutboxHandle {
 
   function resolveTarget(row: DeliveryRow): string | undefined {
     if (row.channel === 'self_dm') return transport.selfJid();
-    if (row.channel === 'group') return row.target ?? undefined;
+    if (row.channel === 'group' || destinationName(row.channel) !== undefined) {
+      return row.target ?? undefined;
+    }
     return undefined;
   }
 
@@ -89,11 +102,23 @@ export function startOutbox(opts: OutboxOptions): OutboxHandle {
       if (!row.target || !isGroupJid(row.target)) return 'group target is not a group JID';
       if (!isGroupPostAllowed(row.target)) return `group posting not enabled for ${row.target}`;
     }
+    const name = destinationName(row.channel);
+    if (name !== undefined) {
+      if (!row.target || !OUTWARD_TARGET_RE.test(row.target)) {
+        return `destination ${name} target is not a WhatsApp JID`;
+      }
+      const summary = store.getSummary(tenantId, row.summaryId);
+      if (!summary) return `summary ${row.summaryId} not found for destination ${name}`;
+      if (!isDestinationAllowed(summary.groupJid, name, row.target)) {
+        return `destination ${name} not allowed for ${summary.groupJid} (config changed?)`;
+      }
+    }
     return undefined;
   }
 
   function heldUntil(row: DeliveryRow, nowS: number): number | undefined {
-    if (row.channel !== 'group' || !row.target || minGroupPostGapMs <= 0) return undefined;
+    const outward = row.channel === 'group' || destinationName(row.channel) !== undefined;
+    if (!outward || !row.target || minGroupPostGapMs <= 0) return undefined;
     const last = store.lastSentToTarget(tenantId, row.target);
     if (last === undefined) return undefined;
     const until = last + Math.ceil(minGroupPostGapMs / 1000);

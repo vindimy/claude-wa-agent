@@ -23,6 +23,8 @@ function fakeTransport(over: Partial<Transport> = {}) {
 }
 
 const G = '120363000000000001@g.us';
+const HUB = '120363000000000009@g.us';
+const ME = '13105551234@s.whatsapp.net';
 
 describe('outbox', () => {
   let store: Store;
@@ -48,13 +50,46 @@ describe('outbox', () => {
       createdTs: Math.floor(clock / 1000),
     });
 
-  const start = (transport: Transport, maxSendsPerDay = 30, allowGroup = false) => {
+  const storeSummary = (id: string, scope = G) =>
+    store.upsertSummary({
+      tenantId: 'owner',
+      id,
+      groupJid: scope,
+      sinceTs: 0,
+      untilTs: 10,
+      watermarkTs: 10,
+      watermarkId: 'M',
+      messageCount: 1,
+      adapter: 'fake',
+      model: null,
+      text: 'x',
+      createdTs: 10,
+    });
+
+  const queueTo = (id: string, name: string, target: string) =>
+    store.putDelivery({
+      tenantId: 'owner',
+      summaryId: id,
+      channel: `to:${name}`,
+      status: 'queued',
+      text: `msg ${id}`,
+      target,
+      createdTs: Math.floor(clock / 1000),
+    });
+
+  const start = (
+    transport: Transport,
+    maxSendsPerDay = 30,
+    allowGroup = false,
+    allowDestination: (scope: string, name: string, target: string) => boolean = () => false,
+  ) => {
     handle = startOutbox({
       tenantId: 'owner',
       store,
       transport,
       maxSendsPerDay,
       isGroupPostAllowed: () => allowGroup,
+      isDestinationAllowed: allowDestination,
       minGroupPostGapMs: 3_600_000,
       pollMs: 1_000_000, // never ticks on its own during tests
       jitterMs: [2000, 5000],
@@ -186,5 +221,68 @@ describe('outbox', () => {
     clock += 3_600_000;
     expect(await h.drainOnce()).toEqual({ kind: 'sent', summaryId: 'g2', channel: 'group' });
     expect(t.sent.map((m) => m.jid)).toEqual([G, 'me@s.whatsapp.net', G]);
+  });
+
+  describe('destinations', () => {
+    it('sends a destination row to a number when config still allows it', async () => {
+      const t = fakeTransport();
+      storeSummary('s1');
+      queueTo('s1', 'me', ME);
+      const h = start(
+        t,
+        30,
+        false,
+        (scope, name, target) => scope === G && name === 'me' && target === ME,
+      );
+      expect(await h.drainOnce()).toEqual({ kind: 'sent', summaryId: 's1', channel: 'to:me' });
+      expect(t.sent).toEqual([{ jid: ME, text: 'msg s1' }]);
+      expect(store.getDelivery('owner', 's1', 'to:me')?.status).toBe('sent');
+    });
+
+    it('drops a destination row the config no longer allows', async () => {
+      const t = fakeTransport();
+      storeSummary('s1');
+      queueTo('s1', 'hub', HUB);
+      const h = start(t, 30, false, () => false);
+      expect(await h.drainOnce()).toMatchObject({
+        kind: 'failed',
+        channel: 'to:hub',
+        permanent: true,
+      });
+      expect(t.sent).toEqual([]);
+      expect(store.getDelivery('owner', 's1', 'to:hub')?.error).toContain('not allowed');
+    });
+
+    it('drops a destination row whose summary is gone', async () => {
+      const t = fakeTransport();
+      queueTo('orphan', 'hub', HUB);
+      const h = start(t, 30, false, () => true);
+      expect(await h.drainOnce()).toMatchObject({ kind: 'failed', permanent: true });
+      expect(store.getDelivery('owner', 'orphan', 'to:hub')?.error).toContain('summary');
+    });
+
+    it('drops a destination row whose target is not a WhatsApp JID', async () => {
+      const t = fakeTransport();
+      storeSummary('s1');
+      queueTo('s1', 'hub', 'not-a-jid');
+      const h = start(t, 30, false, () => true);
+      expect(await h.drainOnce()).toMatchObject({ kind: 'failed', permanent: true });
+      expect(t.sent).toEqual([]);
+    });
+
+    it('spaces two outward sends to the same target and lets a self-DM through', async () => {
+      const t = fakeTransport();
+      storeSummary('s1');
+      storeSummary('s2');
+      queueTo('s1', 'hub', HUB);
+      queueTo('s2', 'hub', HUB);
+      queue('s3');
+      const h = start(t, 30, false, () => true);
+      expect(await h.drainOnce()).toEqual({ kind: 'sent', summaryId: 's1', channel: 'to:hub' });
+      expect(await h.drainOnce()).toEqual({ kind: 'sent', summaryId: 's3', channel: 'self_dm' });
+      expect(await h.drainOnce()).toEqual({ kind: 'held', count: 1 });
+      clock += 3_600_000;
+      expect(await h.drainOnce()).toEqual({ kind: 'sent', summaryId: 's2', channel: 'to:hub' });
+    });
   });
 });
