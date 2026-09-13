@@ -247,7 +247,10 @@ program
   .requiredOption('--since <window>', 'relative span (30m, 12h, 2d, 1w) or ISO date')
   .option('--dry-run', 'print the summary instead of delivering it')
   .option('--fresh', 'regenerate even if this exact window was summarized before')
-  .option('--post', 'also post into the group (only if it has deliver.group: true)')
+  .option(
+    '--post',
+    'also deliver outward: post into the group (if deliver.group: true) and send to its deliver.to destinations',
+  )
   .option('--adapter <name>', `summarizer adapter (${ADAPTER_NAMES.join(', ')})`)
   .option('--style <style>', 'topics | narrative | action-items')
   .option('--language <lang>', 'auto | en | ru | pt | es | zh | ja')
@@ -313,7 +316,7 @@ program
           vaultDir,
           dryRun: opts.dryRun,
           fresh: opts.fresh,
-          postToGroup: Boolean(opts.post),
+          postOutward: Boolean(opts.post),
           adapter: opts.adapter,
           summaryOptions,
         });

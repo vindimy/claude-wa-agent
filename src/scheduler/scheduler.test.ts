@@ -386,7 +386,7 @@ describe('scheduler', () => {
 });
 
 describe('runDigest', () => {
-  it('keeps manual runs private unless postToGroup is set', async () => {
+  it('keeps manual runs private unless postOutward is set', async () => {
     const store = new Store(':memory:');
     const config = configSchema.parse({ groups: [{ jid: G1, deliver: { group: true } }] });
     seed(store, G1, NOW - 60, 3);
@@ -423,7 +423,7 @@ describe('runDigest', () => {
     ]);
     expect(store.queuedDeliveries('owner')).toHaveLength(0);
 
-    const posted = await runDigest({ ...base, postToGroup: true });
+    const posted = await runDigest({ ...base, postOutward: true });
     expect(posted.ok && posted.value.kind === 'ok' && posted.value.outcomes).toEqual([
       { channel: 'group', outcome: 'queued', target: G1 },
     ]);

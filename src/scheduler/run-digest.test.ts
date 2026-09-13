@@ -109,3 +109,68 @@ describe('runDigest personality and instructions', () => {
     expect(seen).toHaveLength(0);
   });
 });
+
+describe('runDigest destinations', () => {
+  const HUB = '120363000000000009@g.us';
+  const withDest = {
+    destinations: { hub: { group: HUB }, me: { number: '+13105551234' } },
+    groups: [{ jid: G1, name: 'Team', deliver: { to: ['hub', 'me'] } }],
+  };
+
+  it('queues destination rows on a scheduled run', async () => {
+    const { config, store, base } = setup(withDest);
+    const { resolveGroupConfig } = await import('../config/index.js');
+    const group = resolveGroupConfig(config, G1);
+    if (!group) throw new Error('group missing');
+    const result = await runDigest({ ...base, group, dryRun: false, trigger: 'daily' });
+    expect(result.ok).toBe(true);
+    if (!result.ok || result.value.kind !== 'ok') throw new Error('unexpected');
+    expect(result.value.outcomes).toContainEqual({
+      channel: 'to',
+      name: 'hub',
+      outcome: 'queued',
+      target: HUB,
+    });
+    expect(result.value.outcomes).toContainEqual({
+      channel: 'to',
+      name: 'me',
+      outcome: 'queued',
+      target: '13105551234@s.whatsapp.net',
+    });
+    expect(
+      store
+        .queuedDeliveries('owner')
+        .map((r) => r.channel)
+        .sort(),
+    ).toEqual(['self_dm', 'to:hub', 'to:me']);
+  });
+
+  it('keeps an on-demand run private unless postOutward is set', async () => {
+    const { config, store, base } = setup(withDest);
+    const { resolveGroupConfig } = await import('../config/index.js');
+    const group = resolveGroupConfig(config, G1);
+    if (!group) throw new Error('group missing');
+    const quiet = await runDigest({ ...base, group, dryRun: false, trigger: 'manual' });
+    if (!quiet.ok || quiet.value.kind !== 'ok') throw new Error('unexpected');
+    expect(quiet.value.outcomes.filter((o) => o.channel === 'to')).toEqual([
+      { channel: 'to', name: 'hub', outcome: 'skipped', reason: expect.stringContaining('--post') },
+      { channel: 'to', name: 'me', outcome: 'skipped', reason: expect.stringContaining('--post') },
+    ]);
+    expect(store.queuedDeliveries('owner').map((r) => r.channel)).toEqual(['self_dm']);
+
+    const posted = await runDigest({
+      ...base,
+      group,
+      dryRun: false,
+      trigger: 'manual',
+      postOutward: true,
+    });
+    if (!posted.ok || posted.value.kind !== 'ok') throw new Error('unexpected');
+    expect(
+      store
+        .queuedDeliveries('owner')
+        .map((r) => r.channel)
+        .sort(),
+    ).toEqual(['self_dm', 'to:hub', 'to:me']);
+  });
+});

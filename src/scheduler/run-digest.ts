@@ -5,17 +5,14 @@ import {
   personalityNames,
   type ResolvedGroupConfig,
   resolvePersonality,
+  resolveScopeDestinations,
   type SummaryOptions,
 } from '../config/index.js';
 import { type DeliveryOutcome, deliverSummary } from '../delivery/index.js';
 import { createLogger, err, ok, type Result } from '../shared/index.js';
 import { type RunTrigger, type Store, type SummaryRecord, summaryId } from '../store/index.js';
-import {
-  createSummarizer,
-  type Summarizer,
-  type SummarizerError,
-  type UnknownAdapterError,
-} from '../summarizer/index.js';
+import type { SummarizerError } from '../summarizer/index.js';
+import { type SummarizerFactory, summarizerFor } from './run-shared.js';
 
 export interface DigestRequest {
   tenantId: string;
@@ -35,19 +32,17 @@ export interface DigestRequest {
   /** Always send to the self-chat (used for `/digest` replies). */
   forceSelfDm?: boolean;
   /**
-   * Post into the group when it has `deliver.group: true`. Defaults to true
-   * for scheduled triggers and false for on-demand ones (`manual`, `command`),
+   * Deliver outward (post into the group when it has `deliver.group: true`,
+   * and send to its `deliver.to` destinations). Defaults to true for
+   * scheduled triggers and false for on-demand ones (`manual`, `command`),
    * so a quick check from the CLI or the self-chat stays private unless the
    * caller asks otherwise (`digest summarize --post`).
    */
-  postToGroup?: boolean;
+  postOutward?: boolean;
   /** Clock in ms; defaults to Date.now(). The scheduler passes its own. */
   now?: () => number;
   /** Test seam. */
-  summarizerFactory?: (
-    name: string,
-    opts: Parameters<typeof createSummarizer>[1],
-  ) => Result<Summarizer, UnknownAdapterError>;
+  summarizerFactory?: SummarizerFactory;
 }
 
 export interface DigestStats {
@@ -93,13 +88,7 @@ export async function runDigest(req: DigestRequest): Promise<Result<DigestResult
   if (!first || !last) return ok({ kind: 'empty' });
 
   const adapterName = req.adapter ?? group.summarizer;
-  const adapterCfg = config.summarizers[adapterName] ?? {};
-  const factory = req.summarizerFactory ?? createSummarizer;
-  const summarizer = factory(adapterName, {
-    bin: adapterCfg.bin,
-    model: adapterCfg.model,
-    timeoutMs: adapterCfg.timeout_seconds ? adapterCfg.timeout_seconds * 1000 : undefined,
-  });
+  const summarizer = summarizerFor(config, adapterName, req.summarizerFactory);
   if (!summarizer.ok) return err(summarizer.error);
 
   const sid = summaryId({
@@ -217,27 +206,28 @@ export async function runDigest(req: DigestRequest): Promise<Result<DigestResult
 
   if (dryRun) return ok({ kind: 'ok', summary, reused, stats, outcomes: [] });
 
-  const postToGroup = req.postToGroup ?? isScheduledTrigger(trigger);
-  const deliver = {
-    ...group.deliver,
-    self_dm: group.deliver.self_dm || Boolean(req.forceSelfDm),
-    group: group.deliver.group && postToGroup,
-  };
+  const outward = req.postOutward ?? isScheduledTrigger(trigger);
+  const destinations = resolveScopeDestinations(config, group.jid);
   const outcomes = deliverSummary({
     store,
     summary,
-    deliver,
+    deliver: {
+      vault: group.deliver.vault,
+      self_dm: group.deliver.self_dm || Boolean(req.forceSelfDm),
+      group: group.deliver.group && outward,
+    },
+    destinations: outward ? destinations : [],
     vaultDir,
     render: { scopeName: groupName, tz },
     nowTs: Math.floor(now() / 1000),
     force: Boolean(req.fresh),
   });
-  if (group.deliver.group && !postToGroup) {
-    outcomes.push({
-      channel: 'group',
-      outcome: 'skipped',
-      reason: 'on-demand runs stay private; scheduled runs post, or pass --post',
-    });
+  if (!outward) {
+    const reason = 'on-demand runs stay private; scheduled runs deliver outward, or pass --post';
+    if (group.deliver.group) outcomes.push({ channel: 'group', outcome: 'skipped', reason });
+    for (const d of destinations) {
+      outcomes.push({ channel: 'to', name: d.name, outcome: 'skipped', reason });
+    }
   }
   return ok({ kind: 'ok', summary, reused, stats, outcomes });
 }
