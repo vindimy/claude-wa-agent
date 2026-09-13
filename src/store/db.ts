@@ -174,6 +174,20 @@ const MIGRATIONS: string[] = [
   CREATE INDEX idx_enrichments_tenant_group_status ON enrichments (tenant_id, group_jid, status);
   CREATE INDEX idx_enrichments_tenant_called ON enrichments (tenant_id, called_ts);
   `,
+  // 006 — recaps (phase 14, ADR 0007). A recap reads each source group from
+  // its own watermark and never moves the group's digest watermark in `runs`.
+  `
+  CREATE TABLE recap_watermarks (
+    tenant_id TEXT NOT NULL,
+    recap TEXT NOT NULL,
+    source_jid TEXT NOT NULL,
+    watermark_ts INTEGER NOT NULL,
+    watermark_id TEXT NOT NULL,
+    run_id TEXT NOT NULL,
+    updated_ts INTEGER NOT NULL,
+    PRIMARY KEY (tenant_id, recap, source_jid)
+  );
+  `,
 ];
 
 export const MIGRATION_COUNT = MIGRATIONS.length;

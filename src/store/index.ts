@@ -15,6 +15,7 @@ export {
   type NewMessage,
   type QuestionRecord,
   type QuestionStatus,
+  type RecapWatermark,
   type RunRecord,
   type RunStatus,
   type RunTrigger,

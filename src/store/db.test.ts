@@ -100,4 +100,19 @@ describe('migration 005 (enrichment)', () => {
       ]),
     );
   });
+
+  it('006 adds recap_watermarks on top of an existing database', () => {
+    const db = openDatabase(':memory:', 5);
+    migrate(db);
+    const cols = db.prepare('PRAGMA table_info(recap_watermarks)').all() as Array<{ name: string }>;
+    expect(cols.map((c) => c.name)).toEqual([
+      'tenant_id',
+      'recap',
+      'source_jid',
+      'watermark_ts',
+      'watermark_id',
+      'run_id',
+      'updated_ts',
+    ]);
+  });
 });

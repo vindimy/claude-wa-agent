@@ -118,6 +118,13 @@ export interface RunRecord {
   createdTs: number;
 }
 
+/** Per-source position of a recap; see `recap_watermarks`. */
+export interface RecapWatermark {
+  sourceJid: string;
+  watermarkTs: number;
+  watermarkId: string;
+}
+
 export type QuestionStatus = 'ok' | 'error';
 
 /** One `/ask` question and its answer (or failure). */
@@ -685,6 +692,55 @@ export class Store {
            @error, @costUsd, @durationMs, @createdTs)`,
       )
       .run({ ...run, dryRun: run.dryRun ? 1 : 0 });
+  }
+
+  /**
+   * Record a recap run and advance the watermark of every source it covered,
+   * atomically. Sources not listed keep their previous position.
+   */
+  recordRecapRun(run: RunRecord, recap: string, watermarks: RecapWatermark[]): void {
+    const upsert = this.db.prepare(
+      `INSERT INTO recap_watermarks (tenant_id, recap, source_jid, watermark_ts, watermark_id,
+         run_id, updated_ts)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT (tenant_id, recap, source_jid) DO UPDATE SET
+         watermark_ts = excluded.watermark_ts, watermark_id = excluded.watermark_id,
+         run_id = excluded.run_id, updated_ts = excluded.updated_ts`,
+    );
+    this.db.transaction(() => {
+      this.insertRun(run);
+      for (const w of watermarks) {
+        upsert.run(
+          run.tenantId,
+          recap,
+          w.sourceJid,
+          w.watermarkTs,
+          w.watermarkId,
+          run.id,
+          run.createdTs,
+        );
+      }
+    })();
+  }
+
+  /** Source watermarks of a recap, keyed by source JID, in source-JID order. */
+  recapWatermarks(
+    tenantId: string,
+    recap: string,
+  ): Map<string, { watermarkTs: number; watermarkId: string }> {
+    const rows = this.db
+      .prepare(
+        `SELECT source_jid, watermark_ts, watermark_id FROM recap_watermarks
+         WHERE tenant_id = ? AND recap = ? ORDER BY source_jid`,
+      )
+      .all(tenantId, recap) as Array<{
+      source_jid: string;
+      watermark_ts: number;
+      watermark_id: string;
+    }>;
+    return new Map(
+      rows.map((r) => [r.source_jid, { watermarkTs: r.watermark_ts, watermarkId: r.watermark_id }]),
+    );
   }
 
   /** Watermark of the latest successful, delivered (non-dry) run for a group. */

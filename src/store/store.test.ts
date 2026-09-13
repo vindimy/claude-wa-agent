@@ -698,3 +698,70 @@ describe('Store: enrichment', () => {
     expect(store.pendingEnrichments('acme', 'g1@g.us')).toBe(0);
   });
 });
+
+describe('Store: recap watermarks', () => {
+  let store: Store;
+  beforeEach(() => {
+    store = new Store(':memory:');
+  });
+
+  const run = (id: string): RunRecord => ({
+    tenantId: T,
+    id,
+    groupJid: 'recap:Zouk',
+    trigger: 'weekly',
+    dryRun: false,
+    sinceTs: 0,
+    untilTs: 100,
+    messageCount: 3,
+    watermarkTs: 90,
+    watermarkId: 'M9',
+    summaryId: 's1',
+    adapter: 'fake',
+    model: null,
+    status: 'ok',
+    error: null,
+    costUsd: null,
+    durationMs: null,
+    createdTs: 100,
+  });
+
+  it('records the run and one watermark per source in one go', () => {
+    store.recordRecapRun(run('r1'), 'Zouk', [
+      { sourceJid: 'a@g.us', watermarkTs: 80, watermarkId: 'A8' },
+      { sourceJid: 'b@g.us', watermarkTs: 90, watermarkId: 'B9' },
+    ]);
+    expect(store.lastWatermark(T, 'recap:Zouk')).toEqual({ watermarkTs: 90, watermarkId: 'M9' });
+    expect([...store.recapWatermarks(T, 'Zouk').entries()]).toEqual([
+      ['a@g.us', { watermarkTs: 80, watermarkId: 'A8' }],
+      ['b@g.us', { watermarkTs: 90, watermarkId: 'B9' }],
+    ]);
+    expect(store.recapWatermarks('acme', 'Zouk').size).toBe(0);
+    expect(store.recapWatermarks(T, 'Other').size).toBe(0);
+  });
+
+  it('advances only the sources given and keeps the rest', () => {
+    store.recordRecapRun(run('r1'), 'Zouk', [
+      { sourceJid: 'a@g.us', watermarkTs: 80, watermarkId: 'A8' },
+      { sourceJid: 'b@g.us', watermarkTs: 90, watermarkId: 'B9' },
+    ]);
+    store.recordRecapRun({ ...run('r2'), createdTs: 200 }, 'Zouk', [
+      { sourceJid: 'b@g.us', watermarkTs: 150, watermarkId: 'B15' },
+    ]);
+    expect(store.recapWatermarks(T, 'Zouk').get('a@g.us')).toEqual({
+      watermarkTs: 80,
+      watermarkId: 'A8',
+    });
+    expect(store.recapWatermarks(T, 'Zouk').get('b@g.us')).toEqual({
+      watermarkTs: 150,
+      watermarkId: 'B15',
+    });
+  });
+
+  it('does not touch the per-group digest watermark', () => {
+    store.recordRecapRun(run('r1'), 'Zouk', [
+      { sourceJid: 'a@g.us', watermarkTs: 80, watermarkId: 'A8' },
+    ]);
+    expect(store.lastWatermark(T, 'a@g.us')).toBeUndefined();
+  });
+});
