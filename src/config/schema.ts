@@ -114,6 +114,25 @@ export const groupConfigSchema = z.object({
   ingest: ingestOverrideSchema.optional(),
 });
 
+/** A recap delivers outward only through `to`; there is no single source to post back into. */
+const recapDeliverOverrideSchema = z
+  .strictObject({
+    self_dm: deliverShape.self_dm,
+    vault: deliverShape.vault,
+    to: deliverShape.to,
+  })
+  .partial();
+
+export const recapConfigSchema = z.object({
+  name: z.string().trim().min(1),
+  /** Configured groups, by JID or name. */
+  sources: z.array(z.string().trim().min(1)).min(1),
+  summarizer: z.string().optional(),
+  cadence: cadenceSchema.optional(),
+  deliver: recapDeliverOverrideSchema.optional(),
+  summary: summaryOverrideSchema.optional(),
+});
+
 /** Options for one summarizer adapter, keyed by adapter name under `summarizers:`. */
 export const summarizerOptionsSchema = z.object({
   bin: z.string().optional(),
@@ -163,6 +182,7 @@ export const configSchema = z
       })
       .prefault({}),
     groups: z.array(groupConfigSchema).default([]),
+    recaps: z.array(recapConfigSchema).default([]),
   })
   // Every personality named anywhere must exist, so a typo fails at load
   // time rather than silently producing a neutral digest.
@@ -194,6 +214,57 @@ export const configSchema = z
           complainDestination(name, ['groups', i, 'deliver', 'to', j]);
         }
       });
+    });
+
+    const groupByRef = (ref: string) => findGroupConfig(config, ref);
+    const groupNames = new Set(
+      config.groups.flatMap((g) => [g.jid.toLowerCase(), g.name?.toLowerCase() ?? '']),
+    );
+    const seenRecapNames = new Set<string>();
+    config.recaps.forEach((r, i) => {
+      const lower = r.name.toLowerCase();
+      if (seenRecapNames.has(lower)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['recaps', i, 'name'],
+          message: `recap "${r.name}" is defined twice (names are case-insensitive)`,
+        });
+      }
+      seenRecapNames.add(lower);
+      if (groupNames.has(lower)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['recaps', i, 'name'],
+          message: `recap "${r.name}" has the same name as a group; /digest could not tell them apart`,
+        });
+      }
+      const seenSources = new Set<string>();
+      r.sources.forEach((ref, j) => {
+        const g = groupByRef(ref);
+        if (!g) {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['recaps', i, 'sources', j],
+            message: `unknown source "${ref}"; every source must be a configured group (JID or name)`,
+          });
+          return;
+        }
+        if (seenSources.has(g.jid)) {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['recaps', i, 'sources', j],
+            message: `source "${ref}" is repeated`,
+          });
+        }
+        seenSources.add(g.jid);
+      });
+      r.deliver?.to?.forEach((name, j) => {
+        if (!Object.hasOwn(config.destinations, name)) {
+          complainDestination(name, ['recaps', i, 'deliver', 'to', j]);
+        }
+      });
+      const p = r.summary?.personality;
+      if (p !== undefined && !known(p)) complain(p, ['recaps', i, 'summary', 'personality']);
     });
   });
 
@@ -229,6 +300,70 @@ export function resolveGroupConfig(config: Config, jid: string): ResolvedGroupCo
     summary: mergeSummary(config.defaults.summary, group.summary),
     ingest: { ...config.ingest, ...group.ingest },
   };
+}
+
+export type RecapConfig = z.infer<typeof recapConfigSchema>;
+
+export interface ResolvedRecapConfig {
+  name: string;
+  /** Scope key used in `summaries`, `runs`, and `recap_watermarks`. */
+  key: string;
+  sources: Array<{ jid: string; name: string }>;
+  summarizer: string;
+  cadence: Cadence;
+  deliver: { self_dm: boolean; vault: boolean; to: string[] };
+  summary: SummaryOptions;
+}
+
+export function recapScopeKey(name: string): string {
+  return `recap:${name}`;
+}
+
+export function isRecapScopeKey(key: string): boolean {
+  return key.startsWith('recap:');
+}
+
+/** A configured group by JID or case-insensitive name. */
+export function findGroupConfig(config: Config, ref: string): GroupConfig | undefined {
+  const trimmed = ref.trim();
+  const lower = trimmed.toLowerCase();
+  return (
+    config.groups.find((g) => g.jid === trimmed) ??
+    config.groups.find((g) => g.name?.toLowerCase() === lower)
+  );
+}
+
+/** A recap by exact (case-insensitive) name, with every default applied. */
+export function resolveRecapConfig(config: Config, name: string): ResolvedRecapConfig | undefined {
+  const lower = name.trim().toLowerCase();
+  const recap = config.recaps.find((r) => r.name.toLowerCase() === lower);
+  if (!recap) return undefined;
+  const sources = recap.sources
+    .map((ref) => findGroupConfig(config, ref))
+    .filter((g): g is GroupConfig => g !== undefined)
+    .map((g) => ({ jid: g.jid, name: g.name ?? g.jid }));
+  return {
+    name: recap.name,
+    key: recapScopeKey(recap.name),
+    sources,
+    summarizer: recap.summarizer ?? config.defaults.summarizer,
+    cadence: recap.cadence ?? config.defaults.cadence,
+    deliver: {
+      self_dm: recap.deliver?.self_dm ?? config.defaults.deliver.self_dm,
+      vault: recap.deliver?.vault ?? config.defaults.deliver.vault,
+      to: recap.deliver?.to ?? [],
+    },
+    summary: mergeSummary(config.defaults.summary, recap.summary),
+  };
+}
+
+/** Exact name first, then the first recap whose name contains `ref`. */
+export function findRecapConfig(config: Config, ref: string): ResolvedRecapConfig | undefined {
+  const exact = resolveRecapConfig(config, ref);
+  if (exact) return exact;
+  const lower = ref.trim().toLowerCase();
+  const partial = config.recaps.find((r) => r.name.toLowerCase().includes(lower));
+  return partial ? resolveRecapConfig(config, partial.name) : undefined;
 }
 
 /** The adapter that writes image and link descriptions. */
@@ -268,7 +403,9 @@ export function allowedJids(config: Config): Set<string> {
  * recaps exist). Empty for an unknown scope: the caller never guesses.
  */
 export function resolveScopeDestinations(config: Config, scopeKey: string): ResolvedDestination[] {
-  const names = resolveGroupConfig(config, scopeKey)?.deliver.to ?? [];
+  const names = isRecapScopeKey(scopeKey)
+    ? (resolveRecapConfig(config, scopeKey.slice('recap:'.length))?.deliver.to ?? [])
+    : (resolveGroupConfig(config, scopeKey)?.deliver.to ?? []);
   return names
     .map((name) => resolveDestination(config.destinations, name))
     .filter((d): d is ResolvedDestination => d !== undefined);

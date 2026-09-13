@@ -7,7 +7,9 @@ import {
   allowedJids,
   configSchema,
   enrichSummarizer,
+  findRecapConfig,
   resolveGroupConfig,
+  resolveRecapConfig,
   resolveScopeDestinations,
 } from './schema.js';
 
@@ -292,5 +294,129 @@ describe('ingest and enrich sections', () => {
   it('SUMMARIZER override also applies to descriptions', () => {
     const config = configSchema.parse({ enrich: { summarizer: 'cli-codex' } });
     expect(enrichSummarizer(overrideSummarizer(config, 'api-anthropic'))).toBe('api-anthropic');
+  });
+});
+
+describe('recaps', () => {
+  const base = {
+    defaults: { summarizer: 'fake', cadence: { type: 'daily', at: '08:00' } },
+    destinations: { hub: { group: '9@g.us' }, me: { number: '+13105551234' } },
+    groups: [
+      { jid: '1@g.us', name: 'Announcements' },
+      { jid: '2@g.us', name: 'Nerds', summarizer: 'cli-gemini' },
+    ],
+  };
+
+  it('resolves a recap with defaults applied', () => {
+    const config = configSchema.parse({
+      ...base,
+      recaps: [
+        {
+          name: 'SoCal Zouk',
+          sources: ['announcements', '2@g.us'],
+          cadence: { type: 'weekly', day: 'sun', at: '18:00' },
+          summary: { max_words: 600, instructions: 'Lead with events.' },
+          deliver: { to: ['hub', 'me'] },
+        },
+      ],
+    });
+    const recap = resolveRecapConfig(config, 'socal zouk');
+    expect(recap).toEqual({
+      name: 'SoCal Zouk',
+      key: 'recap:SoCal Zouk',
+      sources: [
+        { jid: '1@g.us', name: 'Announcements' },
+        { jid: '2@g.us', name: 'Nerds' },
+      ],
+      summarizer: 'fake',
+      cadence: { type: 'weekly', day: 'sun', at: '18:00' },
+      deliver: { self_dm: true, vault: true, to: ['hub', 'me'] },
+      summary: {
+        language: 'en',
+        style: 'topics',
+        max_words: 600,
+        personality: 'neutral',
+        instructions: 'Lead with events.',
+      },
+    });
+    expect(resolveScopeDestinations(config, 'recap:SoCal Zouk')).toEqual([
+      { name: 'hub', kind: 'group', jid: '9@g.us' },
+      { name: 'me', kind: 'number', jid: '13105551234@s.whatsapp.net' },
+    ]);
+  });
+
+  it('finds a recap by substring after an exact match', () => {
+    const config = configSchema.parse({
+      ...base,
+      recaps: [
+        { name: 'Zouk', sources: ['Nerds'] },
+        { name: 'Zouk Weekly', sources: ['Nerds'] },
+      ],
+    });
+    expect(findRecapConfig(config, 'zouk')?.name).toBe('Zouk');
+    expect(findRecapConfig(config, 'weekly')?.name).toBe('Zouk Weekly');
+    expect(findRecapConfig(config, 'nothing')).toBeUndefined();
+  });
+
+  it('rejects a recap whose source is not a configured group', () => {
+    const result = configSchema.safeParse({
+      ...base,
+      recaps: [{ name: 'R', sources: ['Announcements', 'Family'] }],
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues[0]?.message).toContain('unknown source "Family"');
+      expect(result.error.issues[0]?.path).toEqual(['recaps', 0, 'sources', 1]);
+    }
+  });
+
+  it('rejects a repeated source', () => {
+    const result = configSchema.safeParse({
+      ...base,
+      recaps: [{ name: 'R', sources: ['Announcements', '1@g.us'] }],
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error.issues[0]?.message).toContain('repeated');
+  });
+
+  it('rejects a recap name that collides with a group or another recap', () => {
+    const dup = configSchema.safeParse({
+      ...base,
+      recaps: [
+        { name: 'R', sources: ['Nerds'] },
+        { name: 'r', sources: ['Nerds'] },
+      ],
+    });
+    expect(dup.success).toBe(false);
+    const group = configSchema.safeParse({
+      ...base,
+      recaps: [{ name: 'nerds', sources: ['Nerds'] }],
+    });
+    expect(group.success).toBe(false);
+    if (!group.success) expect(group.error.issues[0]?.message).toContain('same name as a group');
+  });
+
+  it('rejects an unknown destination or a group key on a recap', () => {
+    const unknown = configSchema.safeParse({
+      ...base,
+      recaps: [{ name: 'R', sources: ['Nerds'], deliver: { to: ['nope'] } }],
+    });
+    expect(unknown.success).toBe(false);
+    if (!unknown.success) {
+      expect(unknown.error.issues[0]?.path).toEqual(['recaps', 0, 'deliver', 'to', 0]);
+    }
+    const withGroup = configSchema.safeParse({
+      ...base,
+      recaps: [{ name: 'R', sources: ['Nerds'], deliver: { group: true } }],
+    });
+    expect(withGroup.success).toBe(false);
+  });
+
+  it('checks recap personalities like group ones', () => {
+    const result = configSchema.safeParse({
+      ...base,
+      recaps: [{ name: 'R', sources: ['Nerds'], summary: { personality: 'nope' } }],
+    });
+    expect(result.success).toBe(false);
   });
 });
