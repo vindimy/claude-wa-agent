@@ -8,6 +8,11 @@ export interface SummaryInput {
   groupName: string;
   /** Non-deleted messages in the window, oldest first. */
   messages: MessageRow[];
+  /**
+   * Set for a recap: `messages` is every section flattened, and the prompt
+   * renders one transcript block per section in this order.
+   */
+  sections?: SummarySection[];
   /** Window bounds, unix seconds. */
   sinceTs: number;
   untilTs: number;
@@ -19,6 +24,14 @@ export interface SummaryInput {
    * neutral voice). Resolved by the caller so adapters never read config.
    */
   personality?: string;
+}
+
+/** One source group's slice of a recap transcript. */
+export interface SummarySection {
+  groupJid: string;
+  groupName: string;
+  /** Non-deleted messages in the window, oldest first. */
+  messages: MessageRow[];
 }
 
 export interface Summary {

@@ -6,7 +6,14 @@ export { createClaudeCliSummarizer, parseClaudeOutput } from './cli-claude.js';
 export { createCodexCliSummarizer, parseCodexOutput } from './cli-codex.js';
 export { createGeminiCliSummarizer, parseGeminiOutput } from './cli-gemini.js';
 export { createFakeSummarizer } from './fake.js';
-export { buildPrompt, formatDay, formatTime, formatTranscript, type Prompt } from './prompt.js';
+export {
+  buildPrompt,
+  formatDay,
+  formatSectionedTranscript,
+  formatTime,
+  formatTranscript,
+  type Prompt,
+} from './prompt.js';
 export { ADAPTER_NAMES, createSummarizer, type UnknownAdapterError } from './registry.js';
 export type {
   AdapterOptions,
@@ -18,4 +25,5 @@ export type {
   SummarizerError,
   Summary,
   SummaryInput,
+  SummarySection,
 } from './types.js';

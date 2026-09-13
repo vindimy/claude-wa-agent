@@ -226,3 +226,41 @@ describe('buildPrompt', () => {
     expect(user).toContain('https://drive.example.com/d/final-mix-v3');
   });
 });
+
+describe('buildPrompt with sections (recap)', () => {
+  const a = [row({ id: 'A1', body: 'party saturday', ts: 1_756_890_000 })];
+  const b = [
+    row({ id: 'B1', body: 'which shoes', ts: 1_756_893_600, senderName: 'Bob' }),
+    row({ id: 'B2', body: 'suede', ts: 1_756_893_700 }),
+  ];
+  const recap = input([...a, ...b], {
+    groupJid: 'recap:Zouk',
+    groupName: 'Zouk',
+    sections: [
+      { groupJid: 'a@g.us', groupName: 'Announcements', messages: a },
+      { groupJid: 'b@g.us', groupName: 'Nerds', messages: b },
+    ],
+  });
+
+  it('names the recap and lists groups with counts', () => {
+    const { user } = buildPrompt(recap);
+    expect(user).toContain('Recap: Zouk');
+    expect(user).toContain('Groups: Announcements (1), Nerds (2)');
+    expect(user).toContain('3 messages');
+  });
+
+  it('renders one transcript block per group in order', () => {
+    const { user } = buildPrompt(recap);
+    const first = user.indexOf('=== Announcements (1 message) ===');
+    const second = user.indexOf('=== Nerds (2 messages) ===');
+    expect(first).toBeGreaterThan(-1);
+    expect(second).toBeGreaterThan(first);
+    expect(user.slice(first, second)).toContain('party saturday');
+    expect(user.slice(second)).toContain('which shoes');
+  });
+
+  it('adds the multi-group rule to the system prompt', () => {
+    expect(buildPrompt(recap).system).toContain('several groups of one community');
+    expect(buildPrompt(input(a)).system).not.toContain('several groups');
+  });
+});

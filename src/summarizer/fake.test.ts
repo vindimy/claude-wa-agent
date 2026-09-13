@@ -45,6 +45,32 @@ describe('fake summarizer', () => {
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error.tag).toBe('empty');
   });
+
+  it('names the sections when summarizing a recap', async () => {
+    const rows = loadFixtureTranscript('a@g.us').slice(0, 4);
+    const result = await createFakeSummarizer().summarize({
+      tenantId: 'owner',
+      groupJid: 'recap:Zouk',
+      groupName: 'Zouk',
+      messages: rows,
+      sections: [
+        { groupJid: 'a@g.us', groupName: 'Announcements', messages: rows.slice(0, 2) },
+        { groupJid: 'b@g.us', groupName: 'Nerds', messages: rows.slice(2) },
+      ],
+      sinceTs: rows[0]?.ts ?? 0,
+      untilTs: (rows[3]?.ts ?? 0) + 1,
+      tz: 'UTC',
+      options: {
+        language: 'en',
+        style: 'topics',
+        max_words: 300,
+        personality: 'neutral',
+        instructions: '',
+      },
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value.text).toContain('2 groups: Announcements, Nerds');
+  });
 });
 
 describe('fake summarizer complete()', () => {

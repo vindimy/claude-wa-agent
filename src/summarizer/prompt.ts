@@ -1,5 +1,5 @@
 import type { MessageRow } from '../store/index.js';
-import type { SummaryInput } from './types.js';
+import type { SummaryInput, SummarySection } from './types.js';
 
 export interface Prompt {
   system: string;
@@ -122,6 +122,11 @@ export function buildSystemPrompt(input: SummaryInput): string {
     `- ${STYLE_INSTRUCTIONS[options.style]}`,
     `- ${LANGUAGE_INSTRUCTIONS[options.language]}`,
   ];
+  if (input.sections && input.sections.length > 0) {
+    lines.push(
+      '- The transcript covers several groups of one community, one block per group. Write a single recap: a short section per group in the given order (plain-text heading line with the group name, then bullets), skip a group with nothing of substance, and name the group when a topic spans several.',
+    );
+  }
   const voice = input.personality?.trim();
   if (voice) {
     lines.push(
@@ -141,20 +146,43 @@ export function buildSystemPrompt(input: SummaryInput): string {
   return lines.join('\n');
 }
 
+function count(n: number): string {
+  return n === 1 ? '1 message' : `${n} messages`;
+}
+
 export function buildUserPrompt(input: SummaryInput, transcript: string): string {
   const { tz } = input;
   const since = `${formatDay(input.sinceTs, tz)} ${formatTime(input.sinceTs, tz)}`;
   const until = `${formatDay(input.untilTs, tz)} ${formatTime(input.untilTs, tz)}`;
-  return [
-    `Group: ${input.groupName}`,
-    `Window: ${since} → ${until} (${tz}), ${input.messages.length} messages`,
-    '',
-    'Transcript:',
-    transcript,
-  ].join('\n');
+  const window = `Window: ${since} → ${until} (${tz}), ${count(input.messages.length)}`;
+  if (input.sections && input.sections.length > 0) {
+    const groups = input.sections.map((s) => `${s.groupName} (${s.messages.length})`).join(', ');
+    return [
+      `Recap: ${input.groupName}`,
+      `Groups: ${groups}`,
+      window,
+      '',
+      'Transcript:',
+      transcript,
+    ].join('\n');
+  }
+  return [`Group: ${input.groupName}`, window, '', 'Transcript:', transcript].join('\n');
+}
+
+/** One block per section, each headed by the group name and its message count. */
+export function formatSectionedTranscript(sections: SummarySection[], tz: string): string {
+  return sections
+    .map(
+      (s) =>
+        `=== ${s.groupName} (${count(s.messages.length)}) ===\n${formatTranscript(s.messages, tz)}`,
+    )
+    .join('\n\n');
 }
 
 export function buildPrompt(input: SummaryInput): Prompt {
-  const transcript = formatTranscript(input.messages, input.tz);
+  const transcript =
+    input.sections && input.sections.length > 0
+      ? formatSectionedTranscript(input.sections, input.tz)
+      : formatTranscript(input.messages, input.tz);
   return { system: buildSystemPrompt(input), user: buildUserPrompt(input, transcript) };
 }

@@ -28,8 +28,11 @@ export function createFakeSummarizer(): Summarizer {
       const snippet = (body: string | null) =>
         body ? `"${body.slice(0, 60)}${body.length > 60 ? '…' : ''}"` : '[no text]';
 
+      const sectionNote = input.sections?.length
+        ? ` · ${input.sections.length} groups: ${input.sections.map((s) => s.groupName).join(', ')}`
+        : '';
       const text = [
-        `[fake summary · ${input.options.style} · ${input.options.language}]`,
+        `[fake summary · ${input.options.style} · ${input.options.language}${sectionNote}]`,
         `${input.groupName}: ${input.messages.length} messages from ${bySender.size} participants, ${formatDay(input.sinceTs, input.tz)} → ${formatDay(input.untilTs, input.tz)}.`,
         `- Senders: ${senders}`,
         `- First: ${first ? snippet(first.body) : '—'}`,
