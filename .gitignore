@@ -6,3 +6,4 @@ data/
 config.yaml
 vault/
 .DS_Store
+.superpowers/
