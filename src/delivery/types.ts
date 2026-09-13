@@ -23,4 +23,7 @@ export type DeliveryOutcome =
   | { channel: 'self_dm'; outcome: 'already'; status: 'queued' | 'sent' }
   | { channel: 'group'; outcome: 'queued'; target: string }
   | { channel: 'group'; outcome: 'already'; status: 'queued' | 'sent' }
-  | { channel: 'group'; outcome: 'skipped'; reason: string };
+  | { channel: 'group'; outcome: 'skipped'; reason: string }
+  | { channel: 'to'; name: string; outcome: 'queued'; target: string }
+  | { channel: 'to'; name: string; outcome: 'already'; status: 'queued' | 'sent' }
+  | { channel: 'to'; name: string; outcome: 'skipped'; reason: string };

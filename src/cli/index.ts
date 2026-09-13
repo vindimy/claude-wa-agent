@@ -231,6 +231,12 @@ function formatOutcome(o: DeliveryOutcome): string {
       if (o.outcome === 'already')
         return o.status === 'sent' ? 'group:    already posted' : 'group:    already queued';
       return `group:    skipped — ${o.reason}`;
+    case 'to':
+      if (o.outcome === 'queued')
+        return `to ${o.name}: queued for ${o.target} — the listener (\`digest run\`) sends it`;
+      if (o.outcome === 'already')
+        return o.status === 'sent' ? `to ${o.name}: already sent` : `to ${o.name}: already queued`;
+      return `to ${o.name}: skipped — ${o.reason}`;
   }
 }
 

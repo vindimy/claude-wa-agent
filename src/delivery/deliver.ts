@@ -1,8 +1,9 @@
-import type { Deliver } from '../config/index.js';
+import type { ResolvedDestination } from '../config/index.js';
 import { createLogger } from '../shared/index.js';
-import type { Store, SummaryRecord } from '../store/index.js';
+import { destinationChannel, type Store, type SummaryRecord } from '../store/index.js';
 import {
   type RenderContext,
+  renderDestinationText,
   renderGroupPostText,
   renderVaultMarkdown,
   renderWhatsAppText,
@@ -18,7 +19,12 @@ export function isGroupJid(jid: string): boolean {
 export interface DeliverArgs {
   store: Store;
   summary: SummaryRecord;
-  deliver: Deliver;
+  deliver: { self_dm: boolean; vault: boolean; group: boolean };
+  /**
+   * Outward targets, already filtered by the trigger gate. Each gets its own
+   * `to:<name>` row; the outbox re-checks the name against config at send time.
+   */
+  destinations?: ResolvedDestination[];
   vaultDir: string;
   render: RenderContext;
   nowTs: number;
@@ -110,6 +116,31 @@ export function deliverSummary(args: DeliverArgs): DeliveryOutcome[] {
         outcomes.push({ channel: 'group', outcome: 'queued', target: summary.groupJid });
       }
     }
+  }
+
+  for (const dest of args.destinations ?? []) {
+    const channel = destinationChannel(dest.name);
+    const existing = force ? undefined : store.getDelivery(tenantId, summaryId, channel);
+    if (existing && existing.status !== 'failed') {
+      outcomes.push({
+        channel: 'to',
+        name: dest.name,
+        outcome: 'already',
+        status: existing.status,
+      });
+      continue;
+    }
+    store.putDelivery({
+      tenantId,
+      summaryId,
+      channel,
+      status: 'queued',
+      target: dest.jid,
+      text: renderDestinationText(summary, render),
+      createdTs: nowTs,
+    });
+    log.info({ summaryId, destination: dest.name, target: dest.jid }, 'queued destination send');
+    outcomes.push({ channel: 'to', name: dest.name, outcome: 'queued', target: dest.jid });
   }
 
   return outcomes;

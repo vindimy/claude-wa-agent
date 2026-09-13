@@ -74,7 +74,7 @@ describe('deliverSummary', () => {
     const outcomes = deliverSummary({
       store,
       summary: { ...summary, text: 'regenerated' },
-      deliver: { self_dm: true, vault: true, group: false, to: [] },
+      deliver: { self_dm: true, vault: true, group: false },
       vaultDir,
       render: { scopeName: 'Team', tz: 'UTC' },
       nowTs: 9,
@@ -111,7 +111,7 @@ describe('deliverSummary', () => {
     const outcomes = deliverSummary({
       store,
       summary: { ...summary, groupJid: '15551234567@s.whatsapp.net' },
-      deliver: { self_dm: false, vault: false, group: true, to: [] },
+      deliver: { self_dm: false, vault: false, group: true },
       vaultDir,
       render: { scopeName: 'Team', tz: 'UTC' },
       nowTs: 1,
@@ -124,12 +124,61 @@ describe('deliverSummary', () => {
     const outcomes = deliverSummary({
       store,
       summary,
-      deliver: { self_dm: false, vault: true, group: false, to: [] },
+      deliver: { self_dm: false, vault: true, group: false },
       vaultDir: '/dev/null/notadir',
       render: { scopeName: 'Team', tz: 'UTC' },
       nowTs: 1,
     });
     expect(outcomes[0]).toMatchObject({ channel: 'vault', outcome: 'error' });
     expect(store.getDelivery('owner', 'abc', 'vault')).toBeUndefined();
+  });
+
+  const hub = { name: 'hub', kind: 'group' as const, jid: '120363000000000009@g.us' };
+  const me = { name: 'me', kind: 'number' as const, jid: '13105551234@s.whatsapp.net' };
+
+  it('queues one row per destination with the resolved target', () => {
+    const outcomes = deliverSummary({
+      store,
+      summary,
+      deliver: { self_dm: false, vault: false, group: false },
+      destinations: [hub, me],
+      vaultDir,
+      render: { scopeName: 'Team', tz: 'UTC' },
+      nowTs: 1_756_990_200,
+    });
+    expect(outcomes).toEqual([
+      { channel: 'to', name: 'hub', outcome: 'queued', target: hub.jid },
+      { channel: 'to', name: 'me', outcome: 'queued', target: me.jid },
+    ]);
+    const rows = store.queuedDeliveries('owner');
+    expect(rows.map((r) => [r.channel, r.target])).toEqual([
+      ['to:hub', hub.jid],
+      ['to:me', me.jid],
+    ]);
+    expect(rows[0]?.text).toContain('🤖 Digest: Team');
+    expect(rows[0]?.text).toContain('Automated digest of "Team"');
+  });
+
+  it('does not requeue a destination that is already queued or sent', () => {
+    const args = {
+      store,
+      summary,
+      deliver: { self_dm: false, vault: false, group: false },
+      destinations: [hub],
+      vaultDir,
+      render: { scopeName: 'Team', tz: 'UTC' },
+      nowTs: 1_756_990_200,
+    };
+    deliverSummary(args);
+    expect(deliverSummary(args)).toEqual([
+      { channel: 'to', name: 'hub', outcome: 'already', status: 'queued' },
+    ]);
+    store.markDeliverySent('owner', 'abc', 'to:hub', hub.jid, 1_756_990_300);
+    expect(deliverSummary(args)).toEqual([
+      { channel: 'to', name: 'hub', outcome: 'already', status: 'sent' },
+    ]);
+    expect(deliverSummary({ ...args, force: true })).toEqual([
+      { channel: 'to', name: 'hub', outcome: 'queued', target: hub.jid },
+    ]);
   });
 });
