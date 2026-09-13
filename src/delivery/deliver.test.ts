@@ -34,7 +34,7 @@ describe('deliverSummary', () => {
       summary,
       deliver,
       vaultDir,
-      render: { groupName: 'Team', tz: 'UTC' },
+      render: { scopeName: 'Team', tz: 'UTC' },
       nowTs: 1_756_990_200,
     });
 
@@ -76,7 +76,7 @@ describe('deliverSummary', () => {
       summary: { ...summary, text: 'regenerated' },
       deliver: { self_dm: true, vault: true, group: false, to: [] },
       vaultDir,
-      render: { groupName: 'Team', tz: 'UTC' },
+      render: { scopeName: 'Team', tz: 'UTC' },
       nowTs: 9,
       force: true,
     });
@@ -113,7 +113,7 @@ describe('deliverSummary', () => {
       summary: { ...summary, groupJid: '15551234567@s.whatsapp.net' },
       deliver: { self_dm: false, vault: false, group: true, to: [] },
       vaultDir,
-      render: { groupName: 'Team', tz: 'UTC' },
+      render: { scopeName: 'Team', tz: 'UTC' },
       nowTs: 1,
     });
     expect(outcomes[0]).toMatchObject({ channel: 'group', outcome: 'skipped' });
@@ -126,7 +126,7 @@ describe('deliverSummary', () => {
       summary,
       deliver: { self_dm: false, vault: true, group: false, to: [] },
       vaultDir: '/dev/null/notadir',
-      render: { groupName: 'Team', tz: 'UTC' },
+      render: { scopeName: 'Team', tz: 'UTC' },
       nowTs: 1,
     });
     expect(outcomes[0]).toMatchObject({ channel: 'vault', outcome: 'error' });

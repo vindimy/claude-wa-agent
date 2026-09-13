@@ -2,8 +2,11 @@ import type { SummaryRecord } from '../store/index.js';
 import { formatDay, formatTime } from '../summarizer/index.js';
 
 export interface RenderContext {
-  groupName: string;
+  /** The group's name or the recap's name. */
+  scopeName: string;
   tz: string;
+  /** Set for a recap; drives the vault front matter. */
+  sources?: Array<{ jid: string; name: string }>;
 }
 
 /** `example-group`; falls back to the JID's numeric part for empty names. */
@@ -31,7 +34,7 @@ function windowLabel(s: SummaryRecord, tz: string): string {
 /** Plain text for a WhatsApp message. Signed so nobody mistakes it for typing. */
 export function renderWhatsAppText(s: SummaryRecord, ctx: RenderContext): string {
   const n = s.messageCount === 1 ? '1 message' : `${s.messageCount} messages`;
-  return [`🤖 Digest: ${ctx.groupName}`, `${windowLabel(s, ctx.tz)} · ${n}`, '', s.text].join('\n');
+  return [`🤖 Digest: ${ctx.scopeName}`, `${windowLabel(s, ctx.tz)} · ${n}`, '', s.text].join('\n');
 }
 
 /** Trailing line on every group post so members know a bot wrote it. */
@@ -53,9 +56,29 @@ export function renderGroupPostText(s: SummaryRecord, ctx: RenderContext): strin
   ].join('\n');
 }
 
+/** Footer on every message sent to a destination (a group or a number that is not the source). */
+export function destinationSignature(scopeName: string): string {
+  return `_Automated digest of "${scopeName}", posted by a bot, not typed by hand._`;
+}
+
+/**
+ * Text for a destination. Unlike a post back into the source, the reader
+ * may not know which chat this covers, so the scope name leads.
+ */
+export function renderDestinationText(s: SummaryRecord, ctx: RenderContext): string {
+  const n = s.messageCount === 1 ? '1 message' : `${s.messageCount} messages`;
+  return [
+    `🤖 Digest: ${ctx.scopeName} · ${windowLabel(s, ctx.tz)} · ${n}`,
+    '',
+    s.text,
+    '',
+    destinationSignature(ctx.scopeName),
+  ].join('\n');
+}
+
 /** Relative path inside the vault: `<group-slug>/<YYYY-MM-DD>-<id>.md`. */
 export function vaultRelativePath(s: SummaryRecord, ctx: RenderContext): string {
-  return `${slugify(ctx.groupName, s.groupJid)}/${isoDate(s.untilTs, ctx.tz)}-${s.id}.md`;
+  return `${slugify(ctx.scopeName, s.groupJid)}/${isoDate(s.untilTs, ctx.tz)}-${s.id}.md`;
 }
 
 export function renderVaultMarkdown(s: SummaryRecord, ctx: RenderContext): string {
@@ -63,8 +86,13 @@ export function renderVaultMarkdown(s: SummaryRecord, ctx: RenderContext): strin
   const yamlStr = (v: string) => JSON.stringify(v);
   return [
     '---',
-    `group: ${yamlStr(ctx.groupName)}`,
-    `jid: ${yamlStr(s.groupJid)}`,
+    ...(ctx.sources
+      ? [
+          `recap: ${yamlStr(ctx.scopeName)}`,
+          'sources:',
+          ...ctx.sources.map((g) => `  - { name: ${yamlStr(g.name)}, jid: ${yamlStr(g.jid)} }`),
+        ]
+      : [`group: ${yamlStr(ctx.scopeName)}`, `jid: ${yamlStr(s.groupJid)}`]),
     `tenant: ${yamlStr(s.tenantId)}`,
     `summary_id: ${s.id}`,
     `window_from: ${yamlStr(stamp(s.sinceTs))}`,
@@ -77,7 +105,7 @@ export function renderVaultMarkdown(s: SummaryRecord, ctx: RenderContext): strin
     'tags: [whatsapp-digest]',
     '---',
     '',
-    `# ${ctx.groupName} — ${windowLabel(s, ctx.tz)}`,
+    `# ${ctx.scopeName} — ${windowLabel(s, ctx.tz)}`,
     '',
     s.text,
     '',

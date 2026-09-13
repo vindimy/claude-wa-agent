@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { SummaryRecord } from '../store/index.js';
 import {
   GROUP_POST_SIGNATURE,
+  renderDestinationText,
   renderGroupPostText,
   renderVaultMarkdown,
   renderWhatsAppText,
@@ -23,7 +24,7 @@ const s: SummaryRecord = {
   text: 'Line one\n- bullet',
   createdTs: 1_756_990_100,
 };
-const ctx = { groupName: 'Zouk Atoms team', tz: 'UTC' };
+const ctx = { scopeName: 'Zouk Atoms team', tz: 'UTC' };
 
 describe('slugify', () => {
   it('makes filesystem-friendly names and keeps non-Latin letters', () => {
@@ -72,5 +73,42 @@ describe('vault rendering', () => {
     expect(md).toContain('\n# Zouk Atoms team — 2025-09-02 → 2025-09-04\n');
     expect(md.trimEnd().endsWith('- bullet')).toBe(true);
     expect(renderVaultMarkdown({ ...s, model: null }, ctx)).toContain('model: null');
+  });
+});
+
+describe('renderDestinationText', () => {
+  it('heads with the scope name and window and signs at the bottom', () => {
+    const text = renderDestinationText(s, { scopeName: 'SoCal Zouk', tz: 'UTC' });
+    const lines = text.split('\n');
+    expect(lines[0]).toMatch(
+      /^🤖 Digest: SoCal Zouk · 2025-09-0\d(?: → 2025-09-0\d)? · 25 messages$/,
+    );
+    expect(lines[lines.length - 1]).toBe(
+      '_Automated digest of "SoCal Zouk", posted by a bot, not typed by hand._',
+    );
+    expect(text).toContain('\nLine one\n- bullet\n');
+  });
+});
+
+describe('renderVaultMarkdown for a recap', () => {
+  it('lists sources instead of a group', () => {
+    const md = renderVaultMarkdown(
+      { ...s, groupJid: 'recap:SoCal Zouk' },
+      {
+        scopeName: 'SoCal Zouk',
+        tz: 'UTC',
+        sources: [
+          { jid: '1@g.us', name: 'Announcements' },
+          { jid: '2@g.us', name: 'Nerds' },
+        ],
+      },
+    );
+    expect(md).toContain('recap: "SoCal Zouk"');
+    expect(md).toContain(
+      'sources:\n  - { name: "Announcements", jid: "1@g.us" }\n  - { name: "Nerds", jid: "2@g.us" }',
+    );
+    expect(md).not.toContain('\ngroup:');
+    expect(md).not.toContain('\njid:');
+    expect(md).toContain('# SoCal Zouk — ');
   });
 });

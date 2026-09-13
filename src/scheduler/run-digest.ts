@@ -228,7 +228,7 @@ export async function runDigest(req: DigestRequest): Promise<Result<DigestResult
     summary,
     deliver,
     vaultDir,
-    render: { groupName, tz },
+    render: { scopeName: groupName, tz },
     nowTs: Math.floor(now() / 1000),
     force: Boolean(req.fresh),
   });
