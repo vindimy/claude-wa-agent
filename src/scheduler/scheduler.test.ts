@@ -468,6 +468,77 @@ describe('scheduler', () => {
       s.stop();
     });
 
+    it('fires a threshold recap when the two sources together cross the count', async () => {
+      config = configSchema.parse({
+        defaults: { summarizer: 'fake', cadence: { type: 'manual' } },
+        groups: [
+          { jid: G1, name: 'Team' },
+          { jid: G2, name: 'Family' },
+        ],
+        recaps: [
+          {
+            name: 'Both',
+            sources: ['Team', 'Family'],
+            cadence: { type: 'threshold', messages: 10, max_hours: 240 },
+          },
+        ],
+      });
+      seed(store, G1, NOW - 600, 6);
+      const s = start();
+      expect((await s.tick()).find((o) => o.scope === 'recap:Both')?.decision).toEqual({
+        due: false,
+        reason: 'below threshold',
+      });
+      seed(store, G2, NOW - 300, 6);
+      expect((await s.tick()).find((o) => o.scope === 'recap:Both')).toMatchObject({
+        decision: { due: true, reason: '12 messages ≥ 10' },
+        result: 'ok',
+      });
+      expect(store.recentRuns('owner', 'recap:Both', 0)[0]?.messageCount).toBe(12);
+      s.stop();
+    });
+
+    it('records an error run for a failing recap and waits before retrying', async () => {
+      seed(store, G1, NOW - 600);
+      const boom = {
+        ok: true as const,
+        value: {
+          name: 'boom',
+          async summarize() {
+            return { ok: false as const, error: { tag: 'model' as const, message: 'exploded' } };
+          },
+          async complete() {
+            return { ok: false as const, error: { tag: 'model' as const, message: 'exploded' } };
+          },
+        },
+      };
+      const s = startScheduler({
+        tenantId: 'owner',
+        config,
+        store,
+        vaultDir,
+        tickMs: 3_600_000,
+        now: () => clock,
+        tz: 'UTC',
+        summarizerFactory: () => boom,
+      });
+      expect((await s.tick()).find((o) => o.scope === 'recap:Both')).toMatchObject({
+        decision: { due: true },
+        result: 'error',
+      });
+      const runs = store.recentRuns('owner', 'recap:Both', 0);
+      expect(runs).toHaveLength(1);
+      expect(runs[0]).toMatchObject({ status: 'error', summaryId: null });
+      expect(runs[0]?.error).toContain('exploded');
+      expect(store.recapWatermarks('owner', 'Both').size).toBe(0);
+
+      expect((await s.tick()).find((o) => o.scope === 'recap:Both')?.decision).toMatchObject({
+        due: false,
+        reason: 'waiting to retry after error',
+      });
+      s.stop();
+    });
+
     it('describes recaps next to groups', () => {
       const s = start();
       const entries = s.describe();

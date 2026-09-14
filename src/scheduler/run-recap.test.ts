@@ -196,6 +196,24 @@ describe('runRecap', () => {
     expect(wm.get(B)?.watermarkId).toBe(b[b.length - 1]?.id);
   });
 
+  it('queues the destination rows on a manual run with --post', async () => {
+    const { store, base } = setup();
+    const posted = await runRecap({ ...base, trigger: 'manual', postOutward: true });
+    if (!posted.ok || posted.value.kind !== 'ok') throw new Error('unexpected');
+    expect(posted.value.outcomes).toContainEqual({
+      channel: 'to',
+      name: 'hub',
+      outcome: 'queued',
+      target: HUB,
+    });
+    expect(
+      store
+        .queuedDeliveries('owner')
+        .map((r) => r.channel)
+        .sort(),
+    ).toEqual(['self_dm', 'to:hub']);
+  });
+
   it('dry run stores the summary but moves no watermark', async () => {
     const { store, base } = setup();
     const result = await runRecap({ ...base, dryRun: true });

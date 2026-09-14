@@ -270,6 +270,19 @@ describe('outbox', () => {
       expect(t.sent).toEqual([]);
     });
 
+    it('shares the per-target gap with a group row aimed at the same JID', async () => {
+      const t = fakeTransport();
+      storeSummary('s1');
+      queue('g1', 'group');
+      queueTo('s1', 'team', G); // a destination pointing at the group itself
+      const h = start(t, 30, true, () => true);
+      expect(await h.drainOnce()).toEqual({ kind: 'sent', summaryId: 'g1', channel: 'group' });
+      expect(await h.drainOnce()).toEqual({ kind: 'held', count: 1 });
+      clock += 3_600_000;
+      expect(await h.drainOnce()).toEqual({ kind: 'sent', summaryId: 's1', channel: 'to:team' });
+      expect(t.sent.map((m) => m.jid)).toEqual([G, G]);
+    });
+
     it('spaces two outward sends to the same target and lets a self-DM through', async () => {
       const t = fakeTransport();
       storeSummary('s1');
