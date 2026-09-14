@@ -163,7 +163,7 @@ export const PAGE_HTML = String.raw`<!doctype html>
     if (d.self_dm) parts.push('self-DM');
     if (d.vault) parts.push('vault');
     if (d.group) parts.push(pill('posts to group', 'post'));
-    for (const name of d.to || []) parts.push(pill('→ ' + esc(name), 'post'));
+    for (const name of d.to || []) parts.push(pill('→ ' + name, 'post'));
     return parts.length ? parts.join(', ') : '<span class="muted">nothing</span>';
   };
 
@@ -225,20 +225,18 @@ export const PAGE_HTML = String.raw`<!doctype html>
         + '<td>' + activity(g.activity) + '</td></tr>';
     }), 'No groups configured. Add them under groups: in config.yaml.');
 
-    if (recaps.length) {
-      table('recaps', ['Recap', 'Sources', 'Schedule', 'Delivers to', 'Since last recap', 'Last run'], recaps.map((r) => {
-        const dueText = r.due.due ? pill('due: ' + r.due.reason, 'warn') : '<span class="muted">' + esc(r.due.reason) + '</span>';
-        const lr = r.lastRun;
-        const lastRun = lr ? fmtTs(lr.createdTs) + ' ' + pill(lr.status) + '<span class="sub">' + esc(lr.trigger) + (lr.costUsd != null ? ' · ' + usd(lr.costUsd) : '') + (lr.error ? ' · ' + esc(lr.error) : '') + '</span>' : '<span class="muted">never</span>';
-        const pending = r.cadenceType === 'threshold' ? n(r.pendingMessages) + ' messages' : (r.watermarkTs ? ago(r.watermarkTs, now) : '<span class="muted">no recap yet</span>');
-        return '<tr><td><span class="name">' + esc(r.name) + '</span><span class="sub">' + esc(r.summarizer) + ' · ' + esc(r.style) + ' · ' + esc(r.language) + '</span></td>'
-          + '<td>' + r.sources.map(esc).join(', ') + '</td>'
-          + '<td>' + esc(r.cadence) + '<span class="sub">' + dueText + '</span></td>'
-          + '<td>' + deliverText(r.deliver) + '</td>'
-          + '<td>' + pending + '</td>'
-          + '<td>' + lastRun + '</td></tr>';
-      }), 'No recaps configured.');
-    }
+    table('recaps', ['Recap', 'Sources', 'Schedule', 'Delivers to', 'Since last recap', 'Last run'], recaps.map((r) => {
+      const dueText = r.due.due ? pill('due: ' + r.due.reason, 'warn') : '<span class="muted">' + esc(r.due.reason) + '</span>';
+      const lr = r.lastRun;
+      const lastRun = lr ? fmtTs(lr.createdTs) + ' ' + pill(lr.status) + '<span class="sub">' + esc(lr.trigger) + (lr.costUsd != null ? ' · ' + usd(lr.costUsd) : '') + (lr.error ? ' · ' + esc(lr.error) : '') + '</span>' : '<span class="muted">never</span>';
+      const pending = r.cadenceType === 'threshold' ? n(r.pendingMessages) + ' messages' : (r.watermarkTs ? ago(r.watermarkTs, now) : '<span class="muted">no recap yet</span>');
+      return '<tr><td><span class="name">' + esc(r.name) + '</span><span class="sub">' + esc(r.summarizer) + ' · ' + esc(r.style) + ' · ' + esc(r.language) + '</span></td>'
+        + '<td>' + r.sources.map(esc).join(', ') + '</td>'
+        + '<td>' + esc(r.cadence) + '<span class="sub">' + dueText + '</span></td>'
+        + '<td>' + deliverText(r.deliver) + '</td>'
+        + '<td>' + pending + '</td>'
+        + '<td>' + lastRun + '</td></tr>';
+    }), 'No recaps configured.');
 
     table('runs', ['When', 'Group', 'Trigger', 'Status', 'Messages#', 'Adapter', 'Cost#', 'Took#'], runs.map((r) =>
       '<tr><td>' + fmtTs(r.createdTs) + '</td><td>' + esc(r.groupName) + '</td><td>' + esc(r.trigger) + (r.dryRun ? ' <span class="muted">dry run</span>' : '') + '</td>'
