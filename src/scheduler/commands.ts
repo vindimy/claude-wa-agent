@@ -186,16 +186,18 @@ function tokenize(s: string): string[] {
 
 export function helpText(config: Config): string {
   const groups = config.groups.map((g) => `- ${g.name ?? g.jid}`).join('\n');
+  const recaps = config.recaps.map((r) => `- ${r.name} (${r.sources.join(', ')})`).join('\n');
   return [
     '🤖 Commands (send here, in your own chat):',
     '/digest — summarize every group since its last digest',
     '/digest 3d — every group over the last 3 days',
-    '/digest <group> [12h|2d|1w] — one group',
+    '/digest <group|recap> [12h|2d|1w] — one group, or one recap over all its sources',
     'Options after that, key=value or --flag value: style=topics|narrative|action-items lang=en|ru|auto words=<n> voice=<personality> via=<adapter> note="extra guidance"',
     '/ask <group> [12h|2d|1w] <question> — answer from stored messages',
-    'Replies come here only; nothing is posted into a group.',
+    'Replies come here only; nothing is posted into a group or sent to a destination.',
     '',
     'Groups:',
     groups || '(none configured)',
+    ...(recaps ? ['', 'Recaps:', recaps] : []),
   ].join('\n');
 }

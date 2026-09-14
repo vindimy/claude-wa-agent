@@ -61,6 +61,16 @@ describe('parseCommand', () => {
     expect(helpText(cfg)).toContain('- Family');
     expect(helpText(cfg)).toContain('style=');
   });
+
+  it('lists recaps in the help text', () => {
+    const config = configSchema.parse({
+      groups: [{ jid: '1@g.us', name: 'Team' }],
+      recaps: [{ name: 'Weekly', sources: ['Team'] }],
+    });
+    const text = helpText(config);
+    expect(text).toContain('Recaps:');
+    expect(text).toContain('- Weekly (Team)');
+  });
 });
 
 describe('parseCommand /digest options', () => {

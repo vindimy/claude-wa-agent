@@ -521,7 +521,9 @@ program
       tickMs: 3_600_000,
     });
     try {
-      for (const { group, state, decision } of scheduler.describe()) {
+      for (const entry of scheduler.describe()) {
+        if (entry.kind !== 'group') continue;
+        const { group, state, decision } = entry;
         const cadence = describeCadence(group.cadence);
         const last = state.runs[0];
         const lastStr = last ? `${fmtTs(last.createdTs)} ${last.trigger}/${last.status}` : 'never';

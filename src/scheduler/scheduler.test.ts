@@ -46,6 +46,7 @@ describe('scheduler', () => {
     clock = NOW_MS;
     config = configSchema.parse({
       defaults: { summarizer: 'fake', cadence: { type: 'daily', at: '08:00', tz: LA } },
+      destinations: { hub: { group: '120363000000000009@g.us' } },
       groups: [
         { jid: G1, name: 'Team' },
         {
@@ -53,6 +54,14 @@ describe('scheduler', () => {
           name: 'Family',
           cadence: { type: 'threshold', messages: 10, max_hours: 24 },
           deliver: { self_dm: false },
+        },
+      ],
+      recaps: [
+        {
+          name: 'Both',
+          sources: ['Team', 'Family'],
+          cadence: { type: 'daily', at: '09:00', tz: LA },
+          deliver: { to: ['hub'] },
         },
       ],
     });
@@ -74,16 +83,20 @@ describe('scheduler', () => {
     seed(store, G1, NOW - 600);
     const s = start();
     const first = await s.tick();
-    expect(first.find((o) => o.groupJid === G1)).toMatchObject({
+    expect(first.find((o) => o.scope === G1)).toMatchObject({
       decision: { due: true },
       result: 'ok',
     });
-    expect(store.queuedDeliveries('owner')).toHaveLength(1);
     expect(store.recentRuns('owner', G1, 0)).toHaveLength(1);
+    // The recap ticks in the same pass; count only this group's own delivery.
+    const summaryId = store.recentRuns('owner', G1, 0)[0]?.summaryId;
+    expect(store.queuedDeliveries('owner').filter((d) => d.summaryId === summaryId)).toHaveLength(
+      1,
+    );
     expect(store.lastWatermark('owner', G1)?.watermarkTs).toBe(NOW - 600);
 
     const second = await s.tick();
-    expect(second.find((o) => o.groupJid === G1)?.decision.due).toBe(false);
+    expect(second.find((o) => o.scope === G1)?.decision.due).toBe(false);
     expect(store.recentRuns('owner', G1, 0)).toHaveLength(1);
     s.stop();
   });
@@ -91,11 +104,11 @@ describe('scheduler', () => {
   it('records an empty run so an empty window does not re-fire every tick', async () => {
     store.upsertGroup({ tenantId: 'owner', jid: G1, seenTs: NOW - 3 * 86_400 });
     const s = start();
-    expect((await s.tick()).find((o) => o.groupJid === G1)?.result).toBe('empty');
+    expect((await s.tick()).find((o) => o.scope === G1)?.result).toBe('empty');
     const runs = store.recentRuns('owner', G1, 0);
     expect(runs).toHaveLength(1);
     expect(runs[0]?.status).toBe('empty');
-    expect((await s.tick()).find((o) => o.groupJid === G1)?.decision.due).toBe(false);
+    expect((await s.tick()).find((o) => o.scope === G1)?.decision.due).toBe(false);
     s.stop();
   });
 
@@ -119,7 +132,7 @@ describe('scheduler', () => {
       });
     }
     const out = await s.tick();
-    expect(out.find((o) => o.groupJid === G1)?.result).toBe('ok');
+    expect(out.find((o) => o.scope === G1)?.result).toBe('ok');
     const runs = store.recentRuns('owner', G1, 0);
     expect(runs[0]?.messageCount).toBe(3);
     expect(runs[0]?.sinceTs).toBe(NOW - 600 + 1);
@@ -130,16 +143,16 @@ describe('scheduler', () => {
     seed(store, G2, NOW - 60, 12);
     const s = start();
     const out = await s.tick();
-    expect(out.find((o) => o.groupJid === G2)).toMatchObject({
+    expect(out.find((o) => o.scope === G2)).toMatchObject({
       decision: { due: true },
       result: 'ok',
     });
     // self_dm disabled for Family → only the vault
-    expect(store.queuedDeliveries('owner')).toHaveLength(0);
-    expect(
-      store.getDelivery('owner', store.recentRuns('owner', G2, 0)[0]?.summaryId ?? '', 'vault')
-        ?.status,
-    ).toBe('sent');
+    const summaryId = store.recentRuns('owner', G2, 0)[0]?.summaryId ?? '';
+    expect(store.queuedDeliveries('owner').filter((d) => d.summaryId === summaryId)).toHaveLength(
+      0,
+    );
+    expect(store.getDelivery('owner', summaryId, 'vault')?.status).toBe('sent');
     s.stop();
   });
 
@@ -158,7 +171,7 @@ describe('scheduler', () => {
     await s.handleCommand('/digest Nope');
     expect(store.queuedDeliveries('owner').at(-1)?.text).toContain('Unknown group');
     await s.handleCommand('/help');
-    expect(store.queuedDeliveries('owner').at(-1)?.text).toContain('/digest <group>');
+    expect(store.queuedDeliveries('owner').at(-1)?.text).toContain('/digest <group|recap>');
     await s.handleCommand('not a command');
     expect(store.queuedDeliveries('owner')).toHaveLength(3);
     s.stop();
@@ -377,11 +390,61 @@ describe('scheduler', () => {
   it('describe() reports state without running anything', () => {
     seed(store, G1, NOW - 600);
     const s = start();
-    const d = s.describe();
+    const d = s.describe().flatMap((e) => (e.kind === 'group' ? [e] : []));
     expect(d.map((x) => x.group.jid)).toEqual([G1, G2]);
     expect(d[0]?.decision).toMatchObject({ due: true, occurrenceTs: TODAY_0800 });
     expect(store.recentRuns('owner', G1, 0)).toHaveLength(0);
     s.stop();
+  });
+
+  describe('recaps', () => {
+    it('runs a due recap over both sources and queues its destination', async () => {
+      seed(store, G1, NOW - 600);
+      seed(store, G2, NOW - 300, 5);
+      const s = start();
+      const outcomes = await s.tick();
+      expect(outcomes.find((o) => o.scope === 'recap:Both')).toMatchObject({
+        decision: { due: true },
+        result: 'ok',
+      });
+      expect(store.recentRuns('owner', 'recap:Both', 0)).toHaveLength(1);
+      expect(store.recapWatermarks('owner', 'Both').size).toBe(2);
+      expect(store.queuedDeliveries('owner').some((r) => r.channel === 'to:hub')).toBe(true);
+      const again = await s.tick();
+      expect(again.find((o) => o.scope === 'recap:Both')?.decision.due).toBe(false);
+      s.stop();
+    });
+
+    it('records an empty run for a recap with no messages so it does not re-fire', async () => {
+      // A source must have been seen, or the cadence reports "group not seen yet".
+      store.upsertGroup({ tenantId: 'owner', jid: G1, subject: 'Team', seenTs: NOW - 3 * 86_400 });
+      const s = start();
+      await s.tick();
+      const runs = store.recentRuns('owner', 'recap:Both', 0);
+      expect(runs.map((r) => r.status)).toEqual(['empty']);
+      s.stop();
+    });
+
+    it('describes recaps next to groups', () => {
+      const s = start();
+      const entries = s.describe();
+      expect(entries.map((e) => e.kind)).toEqual(['group', 'group', 'recap']);
+      const recap = entries.find((e) => e.kind === 'recap');
+      if (recap?.kind !== 'recap') throw new Error('no recap entry');
+      expect(recap.recap.name).toBe('Both');
+      s.stop();
+    });
+
+    it('/digest <recap> runs the recap privately and replies only on failure or empty', async () => {
+      seed(store, G1, NOW - 600);
+      const s = start();
+      await s.handleCommand('/digest both 2d');
+      const queued = store.queuedDeliveries('owner');
+      expect(queued.map((r) => r.channel)).toEqual(['self_dm']);
+      expect(queued[0]?.text).toContain('🤖 Digest: Both');
+      expect(store.recentRuns('owner', 'recap:Both', 0)[0]?.trigger).toBe('command');
+      s.stop();
+    });
   });
 });
 

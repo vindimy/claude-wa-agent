@@ -28,6 +28,7 @@ export {
 export { type RecapRequest, recapSummaryId, runRecap } from './run-recap.js';
 export { type SummarizerFactory, summarizerFor } from './run-shared.js';
 export {
+  type ScheduleEntry,
   type SchedulerHandle,
   type SchedulerOptions,
   startScheduler,

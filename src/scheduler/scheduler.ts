@@ -2,19 +2,29 @@ import { randomUUID } from 'node:crypto';
 import { parseSince } from '../cli/since.js';
 import {
   type Config,
+  findRecapConfig,
   personalityNames,
   type ResolvedGroupConfig,
+  type ResolvedRecapConfig,
   resolveGroupConfig,
   resolvePersonality,
+  resolveRecapConfig,
   type SummaryOptions,
 } from '../config/index.js';
 import { createLogger } from '../shared/index.js';
 import type { Store } from '../store/index.js';
 import { ADAPTER_NAMES } from '../summarizer/index.js';
 import { askQuestion, describeAskError } from './ask.js';
-import { type DueDecision, decideDue, type GroupScheduleState, windowSince } from './cadence.js';
+import {
+  type DueDecision,
+  decideDue,
+  defaultLookbackS,
+  type GroupScheduleState,
+  windowSince,
+} from './cadence.js';
 import { type DigestCommand, helpText, parseCommand } from './commands.js';
 import { type DigestRequest, describeDigestError, runDigest } from './run-digest.js';
+import { type RecapRequest, runRecap } from './run-recap.js';
 import { systemTimeZone } from './time.js';
 import { type TypingPresence, withTyping } from './typing.js';
 
@@ -45,22 +55,23 @@ export interface SchedulerOptions {
 const DRAIN_BEFORE_COMMAND_MS = 30_000;
 
 export interface TickOutcome {
-  groupJid: string;
+  /** A group JID or `recap:<name>`. */
+  scope: string;
   decision: DueDecision;
   result?: 'ok' | 'empty' | 'error' | 'reused';
 }
 
+export type ScheduleEntry =
+  | { kind: 'group'; group: ResolvedGroupConfig; state: GroupScheduleState; decision: DueDecision }
+  | { kind: 'recap'; recap: ResolvedRecapConfig; state: GroupScheduleState; decision: DueDecision };
+
 export interface SchedulerHandle {
-  /** Evaluate every group once; run the due ones sequentially. */
+  /** Evaluate every group and recap once; run the due ones sequentially. */
   tick(): Promise<TickOutcome[]>;
   /** Handle an owner command from the self-chat; replies are queued as self-DMs. */
   handleCommand(text: string): Promise<void>;
   /** Snapshot for `digest schedule`. */
-  describe(): Array<{
-    group: ResolvedGroupConfig;
-    decision: DueDecision;
-    state: GroupScheduleState;
-  }>;
+  describe(): ScheduleEntry[];
   stop(): void;
 }
 
@@ -80,6 +91,11 @@ export function startScheduler(opts: SchedulerOptions): SchedulerHandle {
     config.groups
       .map((g) => resolveGroupConfig(config, g.jid))
       .filter((g): g is ResolvedGroupConfig => g !== undefined);
+
+  const recaps = (): ResolvedRecapConfig[] =>
+    config.recaps
+      .map((r) => resolveRecapConfig(config, r.name))
+      .filter((r): r is ResolvedRecapConfig => r !== undefined);
 
   function stateFor(group: ResolvedGroupConfig, nowTs: number): GroupScheduleState {
     const watermark = store.lastWatermark(tenantId, group.jid);
@@ -128,6 +144,62 @@ export function startScheduler(opts: SchedulerOptions): SchedulerHandle {
     return result.value.reused ? 'reused' : 'ok';
   }
 
+  /**
+   * A recap's schedule state: runs and watermark under its own scope key, the
+   * earliest `firstSeenTs` across its sources, and — for a threshold cadence —
+   * the messages waiting past each source's own recap watermark.
+   */
+  function stateForRecap(recap: ResolvedRecapConfig, nowTs: number): GroupScheduleState {
+    const watermarks = store.recapWatermarks(tenantId, recap.name);
+    const firstSeen = recap.sources
+      .map((s) => store.getGroup(tenantId, s.jid)?.firstSeenTs)
+      .filter((t): t is number => t !== undefined);
+    const pending =
+      recap.cadence.type === 'threshold'
+        ? recap.sources.reduce((sum, s) => {
+            const wm = watermarks.get(s.jid);
+            return sum + store.countMessages(tenantId, s.jid, wm ? wm.watermarkTs + 1 : 0);
+          }, 0)
+        : 0;
+    return {
+      runs: store.recentRuns(tenantId, recap.key, nowTs - RUN_HORIZON_S),
+      watermark: store.lastWatermark(tenantId, recap.key),
+      firstSeenTs: firstSeen.length > 0 ? Math.min(...firstSeen) : undefined,
+      pendingMessages: pending,
+    };
+  }
+
+  async function runRecapScope(
+    recap: ResolvedRecapConfig,
+    trigger: DigestRequest['trigger'],
+    extra: Partial<RecapRequest> = {},
+  ): Promise<TickOutcome['result']> {
+    const nowTs = Math.floor(now() / 1000);
+    const recapTz = 'tz' in recap.cadence && recap.cadence.tz ? recap.cadence.tz : tz;
+    const result = await runRecap({
+      tenantId,
+      store,
+      config,
+      recap,
+      untilTs: nowTs,
+      trigger,
+      tz: recapTz,
+      vaultDir,
+      now,
+      summarizerFactory: opts.summarizerFactory,
+      ...extra,
+    });
+    if (!result.ok) {
+      log.error(
+        { recap: recap.name, trigger, error: result.error },
+        describeDigestError(result.error),
+      );
+      return 'error';
+    }
+    if (result.value.kind === 'empty') return 'empty';
+    return result.value.reused ? 'reused' : 'ok';
+  }
+
   /** Apply `retention.days` at most once an hour; messages only, never summaries. */
   function pruneIfDue(): void {
     const nowMs = now();
@@ -149,7 +221,7 @@ export function startScheduler(opts: SchedulerOptions): SchedulerHandle {
         if (stopped) break;
         const state = stateFor(group, nowTs);
         const decision = decideDue(group.cadence, state, nowTs, tz);
-        const outcome: TickOutcome = { groupJid: group.jid, decision };
+        const outcome: TickOutcome = { scope: group.jid, decision };
         if (decision.due) {
           log.info({ group: group.jid, reason: decision.reason }, 'scheduled digest due');
           const trigger = group.cadence.type === 'manual' ? 'manual' : group.cadence.type;
@@ -173,6 +245,41 @@ export function startScheduler(opts: SchedulerOptions): SchedulerHandle {
               watermarkId: null,
               summaryId: null,
               adapter: group.summarizer,
+              model: null,
+              status: 'empty',
+              error: null,
+              costUsd: null,
+              durationMs: null,
+              createdTs: nowTs,
+            });
+          }
+        }
+        outcomes.push(outcome);
+      }
+      for (const recap of recaps()) {
+        if (stopped) break;
+        const state = stateForRecap(recap, nowTs);
+        const decision = decideDue(recap.cadence, state, nowTs, tz);
+        const outcome: TickOutcome = { scope: recap.key, decision };
+        if (decision.due) {
+          log.info({ recap: recap.name, reason: decision.reason }, 'scheduled recap due');
+          const trigger = recap.cadence.type === 'manual' ? 'manual' : recap.cadence.type;
+          outcome.result = await runRecapScope(recap, trigger);
+          if (outcome.result === 'empty') {
+            // Record the attempt so an empty window does not re-fire every tick.
+            store.insertRun({
+              tenantId,
+              id: randomUUID(),
+              groupJid: recap.key,
+              trigger,
+              dryRun: false,
+              sinceTs: nowTs - defaultLookbackS(recap.cadence),
+              untilTs: nowTs,
+              messageCount: 0,
+              watermarkTs: null,
+              watermarkId: null,
+              summaryId: null,
+              adapter: recap.summarizer,
               model: null,
               status: 'empty',
               error: null,
@@ -218,10 +325,19 @@ export function startScheduler(opts: SchedulerOptions): SchedulerHandle {
 
     const nowTs = Math.floor(now() / 1000);
     let targets = groups();
+    let recapTarget: ResolvedRecapConfig | undefined;
     if (cmd.groupRef) {
       const g = findGroup(cmd.groupRef);
-      if (!g) return queueReply(`🤖 Unknown group "${cmd.groupRef}". Send /help to list groups.`);
-      targets = [g];
+      if (g) targets = [g];
+      else {
+        recapTarget = findRecapConfig(config, cmd.groupRef);
+        if (!recapTarget) {
+          return queueReply(
+            `🤖 Unknown group or recap "${cmd.groupRef}". Send /help to list them.`,
+          );
+        }
+        targets = [];
+      }
     }
     let since: number | undefined;
     if (cmd.sinceSpec) {
@@ -247,12 +363,33 @@ export function startScheduler(opts: SchedulerOptions): SchedulerHandle {
     if (personality) summaryOptions.personality = personality;
     if (cmd.options.instructions) summaryOptions.instructions = cmd.options.instructions;
     log.info(
-      { groups: targets.map((g) => g.jid), since: cmd.sinceSpec, adapter, options: summaryOptions },
+      {
+        groups: targets.map((g) => g.jid),
+        recap: recapTarget?.name,
+        since: cmd.sinceSpec,
+        adapter,
+        options: summaryOptions,
+      },
       'owner command',
     );
 
     const lines: string[] = [];
     await withTyping(opts.presence, async () => {
+      if (recapTarget) {
+        if (opts.enrichment) {
+          for (const src of recapTarget.sources) {
+            await opts.enrichment.drain(src.jid, DRAIN_BEFORE_COMMAND_MS);
+          }
+        }
+        const r = await runRecapScope(recapTarget, 'command', {
+          sinceTs: since,
+          forceSelfDm: true,
+          adapter,
+          summaryOptions,
+        });
+        if (r === 'empty') lines.push(`${recapTarget.name}: no new messages in any source`);
+        else if (r === 'error') lines.push(`${recapTarget.name}: failed, see logs`);
+      }
       for (const group of targets) {
         if (opts.enrichment) {
           const remaining = await opts.enrichment.drain(group.jid, DRAIN_BEFORE_COMMAND_MS);
@@ -319,12 +456,17 @@ export function startScheduler(opts: SchedulerOptions): SchedulerHandle {
     queueReply(`${header}\nQ: ${cmd.question}\n\n${r.value.answer.text}`);
   }
 
-  function describe() {
+  function describe(): ScheduleEntry[] {
     const nowTs = Math.floor(now() / 1000);
-    return groups().map((group) => {
+    const groupEntries: ScheduleEntry[] = groups().map((group) => {
       const state = stateFor(group, nowTs);
-      return { group, state, decision: decideDue(group.cadence, state, nowTs, tz) };
+      return { kind: 'group', group, state, decision: decideDue(group.cadence, state, nowTs, tz) };
     });
+    const recapEntries: ScheduleEntry[] = recaps().map((recap) => {
+      const state = stateForRecap(recap, nowTs);
+      return { kind: 'recap', recap, state, decision: decideDue(recap.cadence, state, nowTs, tz) };
+    });
+    return [...groupEntries, ...recapEntries];
   }
 
   function schedule(): void {

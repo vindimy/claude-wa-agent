@@ -3,7 +3,7 @@ import type { SessionState } from '../listener/index.js';
 import {
   type DueDecision,
   describeCadence,
-  type GroupScheduleState,
+  type ScheduleEntry,
   startOfLocalDay,
 } from '../scheduler/index.js';
 import type {
@@ -20,11 +20,7 @@ export interface DashboardSource {
   config: Config;
   store: Store;
   /** `scheduler.describe()`; a standalone viewer builds a scheduler for it too. */
-  describeSchedule: () => Array<{
-    group: ResolvedGroupConfig;
-    state: GroupScheduleState;
-    decision: DueDecision;
-  }>;
+  describeSchedule: () => ScheduleEntry[];
   /** Live session state from the listener, or `unknown` for a standalone viewer. */
   getSessionState?: () => SessionState | 'unknown';
   /** Clock in ms; defaults to Date.now(). */
@@ -108,43 +104,46 @@ export interface GroupView {
 export function groupsView(src: DashboardSource): GroupView[] {
   const nowTs = Math.floor((src.now ?? Date.now)() / 1000);
   const seen = new Map(src.store.listGroups(src.tenantId).map((g) => [g.jid, g]));
-  return src.describeSchedule().map(({ group, state, decision }) => {
-    const row = seen.get(group.jid);
-    const last = state.runs[0];
-    return {
-      jid: group.jid,
-      name: group.name ?? row?.subject ?? group.jid,
-      subject: row?.subject ?? null,
-      participants: row?.participantCount ?? null,
-      summarizer: group.summarizer,
-      cadence: describeCadence(group.cadence),
-      cadenceType: group.cadence.type,
-      deliver: group.deliver,
-      personality: group.summary.personality,
-      language: group.summary.language,
-      style: group.summary.style,
-      messagesStored: row?.messageCount ?? 0,
-      lastMessageTs: row?.lastMessageTs ?? null,
-      watermarkTs: state.watermark?.watermarkTs ?? null,
-      pendingMessages: state.pendingMessages,
-      lastRun: last
-        ? {
-            createdTs: last.createdTs,
-            trigger: last.trigger,
-            status: last.status,
-            error: last.error,
-            costUsd: last.costUsd,
-          }
-        : null,
-      due: decision,
-      activity: src.store.messageCountsByDay(
-        src.tenantId,
-        group.jid,
-        nowTs - ACTIVITY_DAYS * DAY_S,
-        src.tz,
-      ),
-    };
-  });
+  return src
+    .describeSchedule()
+    .flatMap((e) => (e.kind === 'group' ? [e] : []))
+    .map(({ group, state, decision }) => {
+      const row = seen.get(group.jid);
+      const last = state.runs[0];
+      return {
+        jid: group.jid,
+        name: group.name ?? row?.subject ?? group.jid,
+        subject: row?.subject ?? null,
+        participants: row?.participantCount ?? null,
+        summarizer: group.summarizer,
+        cadence: describeCadence(group.cadence),
+        cadenceType: group.cadence.type,
+        deliver: group.deliver,
+        personality: group.summary.personality,
+        language: group.summary.language,
+        style: group.summary.style,
+        messagesStored: row?.messageCount ?? 0,
+        lastMessageTs: row?.lastMessageTs ?? null,
+        watermarkTs: state.watermark?.watermarkTs ?? null,
+        pendingMessages: state.pendingMessages,
+        lastRun: last
+          ? {
+              createdTs: last.createdTs,
+              trigger: last.trigger,
+              status: last.status,
+              error: last.error,
+              costUsd: last.costUsd,
+            }
+          : null,
+        due: decision,
+        activity: src.store.messageCountsByDay(
+          src.tenantId,
+          group.jid,
+          nowTs - ACTIVITY_DAYS * DAY_S,
+          src.tz,
+        ),
+      };
+    });
 }
 
 function groupName(config: Config, jid: string): string {
