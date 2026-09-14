@@ -411,4 +411,21 @@ export function resolveScopeDestinations(config: Config, scopeKey: string): Reso
     .filter((d): d is ResolvedDestination => d !== undefined);
 }
 
+/**
+ * Send-time gate for a queued `to:` row: the destination must still exist,
+ * still resolve to the same JID, and still be listed by `scopeKey` (a group
+ * JID or `recap:<name>`). Config is re-read at send time, so an edit between
+ * queueing and sending drops the row instead of posting to a stale target.
+ */
+export function isDestinationAllowed(
+  config: Config,
+  scopeKey: string,
+  name: string,
+  target: string,
+): boolean {
+  return resolveScopeDestinations(config, scopeKey).some(
+    (d) => d.name === name && d.jid === target,
+  );
+}
+
 export type { DestinationConfig, ResolvedDestination };

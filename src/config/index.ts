@@ -14,6 +14,7 @@ export {
   findRecapConfig,
   type GroupConfig,
   type IngestOptions,
+  isDestinationAllowed,
   isRecapScopeKey,
   joinInstructions,
   mergeSummary,

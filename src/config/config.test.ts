@@ -8,6 +8,7 @@ import {
   configSchema,
   enrichSummarizer,
   findRecapConfig,
+  isDestinationAllowed,
   resolveGroupConfig,
   resolveRecapConfig,
   resolveScopeDestinations,
@@ -130,6 +131,63 @@ describe('resolveScopeDestinations', () => {
     ]);
     expect(resolveScopeDestinations(config, '2@g.us')).toEqual([]);
     expect(resolveScopeDestinations(config, 'unknown@g.us')).toEqual([]);
+  });
+});
+
+describe('isDestinationAllowed', () => {
+  const HUB = '9@g.us';
+  const ME = '13105551234@s.whatsapp.net';
+  const raw = {
+    defaults: { summarizer: 'fake' },
+    destinations: { hub: { group: HUB }, me: { number: '+13105551234' } },
+    groups: [{ jid: '1@g.us', name: 'Team', deliver: { to: ['hub', 'me'] } }],
+    recaps: [{ name: 'Weekly', sources: ['Team'], deliver: { to: ['hub'] } }],
+  };
+  const config = configSchema.parse(raw);
+
+  it('allows a destination a group scope still lists', () => {
+    expect(isDestinationAllowed(config, '1@g.us', 'hub', HUB)).toBe(true);
+    expect(isDestinationAllowed(config, '1@g.us', 'me', ME)).toBe(true);
+  });
+
+  it('allows a destination a recap scope still lists', () => {
+    expect(isDestinationAllowed(config, 'recap:Weekly', 'hub', HUB)).toBe(true);
+  });
+
+  it('denies a destination deleted from config', () => {
+    const edited = configSchema.parse({
+      ...raw,
+      destinations: { me: { number: '+13105551234' } },
+      groups: [{ jid: '1@g.us', name: 'Team', deliver: { to: ['me'] } }],
+      recaps: [{ name: 'Weekly', sources: ['Team'] }],
+    });
+    expect(isDestinationAllowed(edited, '1@g.us', 'hub', HUB)).toBe(false);
+    expect(isDestinationAllowed(edited, 'recap:Weekly', 'hub', HUB)).toBe(false);
+  });
+
+  it('denies a destination retargeted to another JID', () => {
+    const edited = configSchema.parse({
+      ...raw,
+      destinations: { hub: { group: '8@g.us' }, me: { number: '+13105551234' } },
+    });
+    expect(isDestinationAllowed(edited, '1@g.us', 'hub', HUB)).toBe(false);
+    expect(isDestinationAllowed(edited, '1@g.us', 'hub', '8@g.us')).toBe(true);
+  });
+
+  it('denies a destination the scope no longer lists', () => {
+    const edited = configSchema.parse({
+      ...raw,
+      groups: [{ jid: '1@g.us', name: 'Team', deliver: { to: ['me'] } }],
+      recaps: [{ name: 'Weekly', sources: ['Team'] }],
+    });
+    expect(isDestinationAllowed(edited, '1@g.us', 'hub', HUB)).toBe(false);
+    expect(isDestinationAllowed(edited, 'recap:Weekly', 'hub', HUB)).toBe(false);
+    expect(isDestinationAllowed(edited, '1@g.us', 'me', ME)).toBe(true);
+  });
+
+  it('denies an unknown scope key', () => {
+    expect(isDestinationAllowed(config, '2@g.us', 'hub', HUB)).toBe(false);
+    expect(isDestinationAllowed(config, 'recap:Nope', 'hub', HUB)).toBe(false);
   });
 });
 

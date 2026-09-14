@@ -7,12 +7,12 @@ import {
   type Config,
   type ConfigError,
   findRecapConfig,
+  isDestinationAllowed,
   loadConfig,
   overrideSummarizer,
   type ResolvedGroupConfig,
   type ResolvedRecapConfig,
   resolveGroupConfig,
-  resolveScopeDestinations,
   type SummaryOptions,
 } from '../config/index.js';
 import { type DashboardHandle, startDashboard } from '../dashboard/index.js';
@@ -157,7 +157,7 @@ program
       // Re-checked at send time: the destination must still exist, still
       // resolve to the same JID, and still be listed by the summary's scope.
       isDestinationAllowed: (scopeKey, name, target) =>
-        resolveScopeDestinations(config, scopeKey).some((d) => d.name === name && d.jid === target),
+        isDestinationAllowed(config, scopeKey, name, target),
     });
     enrichment.start();
 
