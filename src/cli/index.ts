@@ -6,14 +6,17 @@ import {
   applyDashboardEnv,
   type Config,
   type ConfigError,
+  findRecapConfig,
   loadConfig,
   overrideSummarizer,
   type ResolvedGroupConfig,
+  type ResolvedRecapConfig,
   resolveGroupConfig,
+  resolveScopeDestinations,
   type SummaryOptions,
 } from '../config/index.js';
 import { type DashboardHandle, startDashboard } from '../dashboard/index.js';
-import { type DeliveryOutcome, startOutbox } from '../delivery/index.js';
+import { startOutbox } from '../delivery/index.js';
 import { backfillLinks, createEnrichmentWorker } from '../enrich/index.js';
 import { type ListenerHandle, type SessionState, startListener } from '../listener/index.js';
 import {
@@ -22,6 +25,7 @@ import {
   describeCadence,
   describeDigestError,
   runDigest,
+  runRecap,
   type SchedulerHandle,
   startScheduler,
   systemTimeZone,
@@ -30,6 +34,7 @@ import {
 import { createLogger, err, migrateLegacyAuthDir, OWNER_TENANT_ID } from '../shared/index.js';
 import { Store } from '../store/index.js';
 import { ADAPTER_NAMES } from '../summarizer/index.js';
+import { describeDeliver, formatOutcome } from './format.js';
 import { parseSince } from './since.js';
 
 try {
@@ -149,6 +154,10 @@ program
       minGroupPostGapMs: config.limits.min_group_post_gap_minutes * 60_000,
       // Re-checked at send time: only groups opted in via config are posted to.
       isGroupPostAllowed: (jid) => resolveGroupConfig(config, jid)?.deliver.group === true,
+      // Re-checked at send time: the destination must still exist, still
+      // resolve to the same JID, and still be listed by the summary's scope.
+      isDestinationAllowed: (scopeKey, name, target) =>
+        resolveScopeDestinations(config, scopeKey).some((d) => d.name === name && d.jid === target),
     });
     enrichment.start();
 
@@ -215,35 +224,22 @@ function findGroup(config: Config, store: Store, ref: string): ResolvedGroupConf
   return undefined;
 }
 
-function formatOutcome(o: DeliveryOutcome): string {
-  switch (o.channel) {
-    case 'vault':
-      if (o.outcome === 'written') return `vault:    wrote ${o.path}`;
-      if (o.outcome === 'already')
-        return `vault:    already written${o.path ? ` (${o.path})` : ''}`;
-      return `vault:    FAILED — ${o.message}`;
-    case 'self_dm':
-      if (o.outcome === 'queued') return 'self-DM:  queued — the listener (`digest run`) sends it';
-      return o.status === 'sent' ? 'self-DM:  already sent' : 'self-DM:  already queued';
-    case 'group':
-      if (o.outcome === 'queued')
-        return `group:    queued for ${o.target} — the listener (\`digest run\`) posts it`;
-      if (o.outcome === 'already')
-        return o.status === 'sent' ? 'group:    already posted' : 'group:    already queued';
-      return `group:    skipped — ${o.reason}`;
-    case 'to':
-      if (o.outcome === 'queued')
-        return `to ${o.name}: queued for ${o.target} — the listener (\`digest run\`) sends it`;
-      if (o.outcome === 'already')
-        return o.status === 'sent' ? `to ${o.name}: already sent` : `to ${o.name}: already queued`;
-      return `to ${o.name}: skipped — ${o.reason}`;
-  }
+type Scope =
+  | { kind: 'group'; group: ResolvedGroupConfig }
+  | { kind: 'recap'; recap: ResolvedRecapConfig };
+
+/** A group (JID, configured name, or subject) first; then a recap by name. */
+function findScope(config: Config, store: Store, ref: string): Scope | undefined {
+  const group = findGroup(config, store, ref);
+  if (group) return { kind: 'group', group };
+  const recap = findRecapConfig(config, ref);
+  return recap ? { kind: 'recap', recap } : undefined;
 }
 
 program
   .command('summarize')
   .description('summarize one group over a time window and deliver it (or --dry-run)')
-  .argument('<group>', 'group JID, configured name, or subject')
+  .argument('<group>', 'group JID, configured name, or subject; or a recap name')
   .requiredOption('--since <window>', 'relative span (30m, 12h, 2d, 1w) or ISO date')
   .option('--dry-run', 'print the summary instead of delivering it')
   .option('--fresh', 'regenerate even if this exact window was summarized before')
@@ -279,11 +275,14 @@ program
       const vaultDir = resolve(process.env.VAULT_DIR ?? config.vault.dir);
       const store = new Store(dbPath);
       try {
-        const group = findGroup(config, store, groupRef);
-        if (!group) {
-          const known = config.groups.map((g) => `  ${g.jid}  ${g.name ?? ''}`).join('\n');
+        const scope = findScope(config, store, groupRef);
+        if (!scope) {
+          const known = [
+            ...config.groups.map((g) => `  ${g.jid}  ${g.name ?? ''}`),
+            ...config.recaps.map((r) => `  recap: ${r.name}  (${r.sources.join(', ')})`),
+          ].join('\n');
           console.error(
-            `Unknown or non-allow-listed group "${groupRef}". Configured groups:\n${known}`,
+            `Unknown or non-allow-listed group or recap "${groupRef}". Configured:\n${known}`,
           );
           process.exit(1);
         }
@@ -301,17 +300,16 @@ program
         if (opts.maxWords && opts.maxWords > 0) summaryOptions.max_words = opts.maxWords;
         if (opts.personality) summaryOptions.personality = opts.personality;
         if (opts.instructions) summaryOptions.instructions = opts.instructions;
-        const cadenceTz = 'tz' in group.cadence ? group.cadence.tz : undefined;
+        const cadence = scope.kind === 'group' ? scope.group.cadence : scope.recap.cadence;
+        const cadenceTz = 'tz' in cadence ? cadence.tz : undefined;
         const tz = opts.tz ?? cadenceTz ?? systemTimeZone();
 
-        const result = await runDigest({
+        const shared = {
           tenantId,
           store,
           config,
-          group,
-          sinceTs: since.value,
           untilTs: nowTs,
-          trigger: 'manual',
+          trigger: 'manual' as const,
           tz,
           vaultDir,
           dryRun: opts.dryRun,
@@ -319,13 +317,19 @@ program
           postOutward: Boolean(opts.post),
           adapter: opts.adapter,
           summaryOptions,
-        });
+        };
+        const result =
+          scope.kind === 'group'
+            ? await runDigest({ ...shared, group: scope.group, sinceTs: since.value })
+            : await runRecap({ ...shared, recap: scope.recap, sinceTs: since.value });
+        const scopeName =
+          scope.kind === 'group' ? (scope.group.name ?? scope.group.jid) : scope.recap.name;
         if (!result.ok) {
           log.error({ error: result.error }, describeDigestError(result.error));
           process.exit(1);
         }
         if (result.value.kind === 'empty') {
-          console.log(`No messages in ${group.name ?? group.jid} since ${opts.since}.`);
+          console.log(`No messages in ${scopeName} since ${opts.since}.`);
           return;
         }
         const { summary, reused, outcomes } = result.value;
@@ -509,7 +513,7 @@ program
 
 program
   .command('schedule')
-  .description('show each group’s cadence, last run, and whether a digest is due now')
+  .description('show each group’s and recap’s cadence, last run, and whether a digest is due now')
   .action(() => {
     const config = loadConfigOrExit();
     const store = new Store(dbPath);
@@ -522,19 +526,27 @@ program
     });
     try {
       for (const entry of scheduler.describe()) {
-        if (entry.kind !== 'group') continue;
-        const { group, state, decision } = entry;
-        const cadence = describeCadence(group.cadence);
+        const { state, decision } = entry;
         const last = state.runs[0];
         const lastStr = last ? `${fmtTs(last.createdTs)} ${last.trigger}/${last.status}` : 'never';
         const wm = state.watermark ? fmtTs(state.watermark.watermarkTs) : '—';
         const due = decision.due ? `DUE (${decision.reason})` : `not due: ${decision.reason}`;
-        console.log(`${group.name ?? group.jid}`);
-        console.log(`  cadence:   ${cadence}`);
-        console.log(`  deliver:   ${describeDeliver(group.deliver)}`);
+        if (entry.kind === 'group') {
+          const { group } = entry;
+          console.log(`${group.name ?? group.jid}`);
+          console.log(`  cadence:   ${describeCadence(group.cadence)}`);
+          console.log(`  deliver:   ${describeDeliver(group.deliver)}`);
+        } else {
+          const { recap } = entry;
+          console.log(`${recap.name} (recap)`);
+          console.log(`  sources:   ${recap.sources.map((s) => s.name).join(', ')}`);
+          console.log(`  cadence:   ${describeCadence(recap.cadence)}`);
+          console.log(`  deliver:   ${describeDeliver(recap.deliver)}`);
+        }
         console.log(`  last run:  ${lastStr}`);
         console.log(`  watermark: ${wm}`);
-        if (group.cadence.type === 'threshold')
+        const cadence = entry.kind === 'group' ? entry.group.cadence : entry.recap.cadence;
+        if (cadence.type === 'threshold')
           console.log(`  pending:   ${state.pendingMessages} messages`);
         console.log(`  status:    ${due}`);
       }
@@ -543,11 +555,6 @@ program
       store.close();
     }
   });
-
-function describeDeliver(d: ResolvedGroupConfig['deliver']): string {
-  const on = [d.self_dm && 'self-DM', d.vault && 'vault', d.group && 'GROUP POST'].filter(Boolean);
-  return on.length > 0 ? on.join(', ') : 'nothing';
-}
 
 function fmtTs(ts: number): string {
   return new Date(ts * 1000).toISOString().slice(0, 16).replace('T', ' ');
