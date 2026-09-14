@@ -6,6 +6,7 @@ import { loadFixtureTranscript } from '../summarizer/fixtures.js';
 import { type DashboardHandle, startDashboard } from './server.js';
 
 const G1 = '120363000000000001@g.us';
+const G2 = '120363000000000002@g.us';
 const NOW_MS = Date.UTC(2026, 8, 4, 17, 0);
 const NOW = NOW_MS / 1000;
 
@@ -19,7 +20,12 @@ describe('dashboard server', () => {
     store = new Store(':memory:');
     config = configSchema.parse({
       defaults: { summarizer: 'fake', cadence: { type: 'daily', at: '08:00', tz: 'UTC' } },
-      groups: [{ jid: G1, name: 'Team' }],
+      destinations: { hub: { group: '120363000000000009@g.us' } },
+      groups: [
+        { jid: G1, name: 'Team' },
+        { jid: G2, name: 'Family' },
+      ],
+      recaps: [{ name: 'Both', sources: ['Team', 'Family'], deliver: { to: ['hub'] } }],
     });
     const rows = loadFixtureTranscript(G1);
     const last = rows[rows.length - 1];
@@ -115,7 +121,7 @@ describe('dashboard server', () => {
       sendsToday: 0,
       maxSendsPerDay: 30,
       retentionDays: 30,
-      groupsConfigured: 1,
+      groupsConfigured: 2,
       nowTs: NOW,
       enrichment: { queued: 1, failed: 1, doneToday: 1, maxPerDay: 200 },
     });
@@ -123,8 +129,9 @@ describe('dashboard server', () => {
 
   it('lists configured groups with store stats and schedule state', async () => {
     const body = (await (await get('/api/groups')).json()) as Array<Record<string, unknown>>;
-    expect(body).toHaveLength(1);
-    expect(body[0]).toMatchObject({
+    expect(body).toHaveLength(2);
+    const team = body.find((g) => g.jid === G1);
+    expect(team).toMatchObject({
       jid: G1,
       name: 'Team',
       subject: 'Team chat',
@@ -135,7 +142,7 @@ describe('dashboard server', () => {
       lastMessageTs: NOW - 600,
       due: { due: true },
     });
-    expect(body[0]?.activity).toEqual(
+    expect(team?.activity).toEqual(
       expect.arrayContaining([expect.objectContaining({ count: expect.any(Number) })]),
     );
   });
@@ -148,6 +155,25 @@ describe('dashboard server', () => {
     >;
     expect(questions[0]).toMatchObject({ question: 'Who?', answer: 'Lena.', groupName: 'Team' });
     expect(await (await get('/api/outbox')).json()).toEqual({ pending: [], recent: [] });
+  });
+
+  it('serves recaps', async () => {
+    const res = await get('/api/recaps');
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Array<{
+      name: string;
+      sources: string[];
+      deliver: { to: string[] };
+    }>;
+    expect(body).toHaveLength(1);
+    expect(body[0]?.name).toBe('Both');
+    expect(body[0]?.sources).toHaveLength(2);
+    expect(body[0]?.deliver.to).toEqual(['hub']);
+  });
+
+  it('keeps recaps out of /api/groups', async () => {
+    const body = (await (await get('/api/groups')).json()) as Array<{ jid: string }>;
+    expect(body.every((g) => g.jid.endsWith('@g.us'))).toBe(true);
   });
 
   it('answers 404 for unknown paths and 405 for writes', async () => {

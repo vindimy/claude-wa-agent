@@ -6,6 +6,7 @@ import {
   groupsView,
   outboxView,
   questionsView,
+  recapsView,
   runsView,
   statusView,
   summariesView,
@@ -44,6 +45,7 @@ export function startDashboard(opts: DashboardOptions): Promise<DashboardHandle>
   const routes: Record<string, (url: URL) => unknown> = {
     '/api/status': () => statusView(opts),
     '/api/groups': () => groupsView(opts),
+    '/api/recaps': () => recapsView(opts),
     '/api/runs': (url) => runsView(opts, limitOf(url)),
     '/api/summaries': (url) => summariesView(opts, limitOf(url)),
     '/api/questions': (url) => questionsView(opts, limitOf(url)),

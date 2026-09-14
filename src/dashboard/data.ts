@@ -1,4 +1,10 @@
-import { type Config, type ResolvedGroupConfig, resolveGroupConfig } from '../config/index.js';
+import {
+  type Config,
+  isRecapScopeKey,
+  type ResolvedGroupConfig,
+  type ResolvedRecapConfig,
+  resolveGroupConfig,
+} from '../config/index.js';
 import type { SessionState } from '../listener/index.js';
 import {
   type DueDecision,
@@ -146,8 +152,57 @@ export function groupsView(src: DashboardSource): GroupView[] {
     });
 }
 
-function groupName(config: Config, jid: string): string {
-  return resolveGroupConfig(config, jid)?.name ?? jid;
+export interface RecapView {
+  name: string;
+  sources: string[];
+  summarizer: string;
+  cadence: string;
+  cadenceType: ResolvedRecapConfig['cadence']['type'];
+  deliver: ResolvedRecapConfig['deliver'];
+  personality: string;
+  language: string;
+  style: string;
+  watermarkTs: number | null;
+  pendingMessages: number;
+  lastRun: GroupView['lastRun'];
+  due: DueDecision;
+}
+
+export function recapsView(src: DashboardSource): RecapView[] {
+  return src
+    .describeSchedule()
+    .flatMap((e) => (e.kind === 'recap' ? [e] : []))
+    .map(({ recap, state, decision }) => {
+      const last = state.runs[0];
+      return {
+        name: recap.name,
+        sources: recap.sources.map((s) => s.name),
+        summarizer: recap.summarizer,
+        cadence: describeCadence(recap.cadence),
+        cadenceType: recap.cadence.type,
+        deliver: recap.deliver,
+        personality: recap.summary.personality,
+        language: recap.summary.language,
+        style: recap.summary.style,
+        watermarkTs: state.watermark?.watermarkTs ?? null,
+        pendingMessages: state.pendingMessages,
+        lastRun: last
+          ? {
+              createdTs: last.createdTs,
+              trigger: last.trigger,
+              status: last.status,
+              error: last.error,
+              costUsd: last.costUsd,
+            }
+          : null,
+        due: decision,
+      };
+    });
+}
+
+function scopeName(config: Config, key: string): string {
+  if (isRecapScopeKey(key)) return `${key.slice('recap:'.length)} (recap)`;
+  return resolveGroupConfig(config, key)?.name ?? key;
 }
 
 export type RunView = RunRecord & { groupName: string };
@@ -155,7 +210,7 @@ export type RunView = RunRecord & { groupName: string };
 export function runsView(src: DashboardSource, limit: number): RunView[] {
   return src.store
     .listRuns(src.tenantId, limit)
-    .map((r) => ({ ...r, groupName: groupName(src.config, r.groupJid) }));
+    .map((r) => ({ ...r, groupName: scopeName(src.config, r.groupJid) }));
 }
 
 export type SummaryView = SummaryRecord & {
@@ -166,7 +221,7 @@ export type SummaryView = SummaryRecord & {
 export function summariesView(src: DashboardSource, limit: number): SummaryView[] {
   return src.store.listSummaries(src.tenantId, limit).map((s) => ({
     ...s,
-    groupName: groupName(src.config, s.groupJid),
+    groupName: scopeName(src.config, s.groupJid),
     deliveries: s.deliveries.map((d) => ({
       channel: d.channel,
       status: d.status,
@@ -182,7 +237,7 @@ export type QuestionView = QuestionRecord & { groupName: string };
 export function questionsView(src: DashboardSource, limit: number): QuestionView[] {
   return src.store
     .listQuestions(src.tenantId, limit)
-    .map((q) => ({ ...q, groupName: groupName(src.config, q.groupJid) }));
+    .map((q) => ({ ...q, groupName: scopeName(src.config, q.groupJid) }));
 }
 
 export interface OutboxView {
