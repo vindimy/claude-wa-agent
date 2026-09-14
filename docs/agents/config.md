@@ -75,8 +75,9 @@ recaps:                      # several groups, one model call, their own cadence
   time). A recap (`recaps:`) has `name`, `sources` (configured groups),
   and the same `cadence`, `summarizer`, `summary`, and `deliver` keys as a
   group minus `deliver.group`. Recap names must not collide with group
-  names: `/digest <ref>` and `digest summarize <ref>` try groups first,
-  then recaps (exact name, then substring).
+  names, and group names must be unique (case-insensitive), since a recap
+  source binds by name: `/digest <ref>` and `digest summarize <ref>` try
+  groups first, then recaps (exact name, then unique substring).
 
 ## Self-chat commands
 
@@ -85,8 +86,9 @@ lives in `src/scheduler/commands.ts`.
 
 - `/digest [group|recap] [window]` triggers an on-demand digest. `<ref>`
   resolves a group first (JID, name, subject), then a recap (exact name,
-  then substring); a recap run summarizes every source from each source's
-  own recap watermark, in one model call. The `digest summarize` knobs ride
+  then unique substring; an ambiguous one is refused); a recap run
+  summarizes every source from each source's own recap watermark, in one
+  model call. The `digest summarize` knobs ride
   along as `key=value` tokens or `--flags`:
   `/digest Family 2d style=narrative lang=ru words=150 voice=dry via=api-openai`.
   On-demand digests stay private (self-DM + vault) unless `--post` is given

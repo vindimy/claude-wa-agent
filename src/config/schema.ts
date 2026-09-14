@@ -202,6 +202,21 @@ export const configSchema = z
       const p = g.summary?.personality;
       if (p !== undefined && !known(p)) complain(p, ['groups', i, 'summary', 'personality']);
     });
+    // A recap source binds by name, and `findGroupConfig` takes the first
+    // match, so two groups sharing a name would silently pick one.
+    const seenGroupNames = new Set<string>();
+    config.groups.forEach((g, i) => {
+      if (g.name === undefined) return;
+      const lower = g.name.trim().toLowerCase();
+      if (seenGroupNames.has(lower)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['groups', i, 'name'],
+          message: `group name "${g.name}" is used twice (names are case-insensitive)`,
+        });
+      }
+      seenGroupNames.add(lower);
+    });
     const complainDestination = (name: string, path: (string | number)[]) =>
       ctx.addIssue({
         code: 'custom',
@@ -357,13 +372,18 @@ export function resolveRecapConfig(config: Config, name: string): ResolvedRecapC
   };
 }
 
-/** Exact name first, then the first recap whose name contains `ref`. */
+/**
+ * Exact name first, then the one recap whose name contains `ref`. An
+ * ambiguous substring resolves to nothing, like an ambiguous group subject:
+ * the caller replies "unknown" rather than guessing which recap to post.
+ */
 export function findRecapConfig(config: Config, ref: string): ResolvedRecapConfig | undefined {
   const exact = resolveRecapConfig(config, ref);
   if (exact) return exact;
   const lower = ref.trim().toLowerCase();
-  const partial = config.recaps.find((r) => r.name.toLowerCase().includes(lower));
-  return partial ? resolveRecapConfig(config, partial.name) : undefined;
+  const partial = config.recaps.filter((r) => r.name.toLowerCase().includes(lower));
+  const only = partial.length === 1 ? partial[0] : undefined;
+  return only ? resolveRecapConfig(config, only.name) : undefined;
 }
 
 /** The adapter that writes image and link descriptions. */

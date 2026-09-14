@@ -29,8 +29,10 @@ without weakening ADR 0002.
   deliveries primary key is unchanged and one summary fans out to many.
 - **No global destinations.** `defaults.deliver.to` is rejected. See the
   amendment to ADR 0002.
-- **Recap names are unique across recaps and groups**, so `/digest <ref>`
-  resolves without ambiguity: groups first, then recaps.
+- **Recap names are unique across recaps and groups**, and group names are
+  unique among themselves, so `/digest <ref>` resolves without ambiguity:
+  groups first, then recaps. A substring match must be unique as well; an
+  ambiguous ref resolves to nothing rather than to the first hit.
 
 ## Consequences
 

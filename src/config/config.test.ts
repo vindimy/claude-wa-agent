@@ -56,6 +56,24 @@ describe('configSchema', () => {
     ).toBe(true);
   });
 
+  it('rejects two groups with the same name, case-insensitively', () => {
+    const result = configSchema.safeParse({
+      groups: [
+        { jid: '1@g.us', name: 'Chat' },
+        { jid: '2@g.us', name: 'chat' },
+      ],
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues[0]?.message).toContain('group name "chat" is used twice');
+      expect(result.error.issues[0]?.path).toEqual(['groups', 1, 'name']);
+    }
+    // Nameless groups never collide.
+    expect(configSchema.safeParse({ groups: [{ jid: '1@g.us' }, { jid: '2@g.us' }] }).success).toBe(
+      true,
+    );
+  });
+
   it('rejects a group JID that is not a group', () => {
     const result = configSchema.safeParse({ groups: [{ jid: '15551234567@s.whatsapp.net' }] });
     expect(result.success).toBe(false);
@@ -403,7 +421,7 @@ describe('recaps', () => {
     ]);
   });
 
-  it('finds a recap by substring after an exact match', () => {
+  it('finds a recap by unique substring after an exact match', () => {
     const config = configSchema.parse({
       ...base,
       recaps: [
@@ -414,6 +432,19 @@ describe('recaps', () => {
     expect(findRecapConfig(config, 'zouk')?.name).toBe('Zouk');
     expect(findRecapConfig(config, 'weekly')?.name).toBe('Zouk Weekly');
     expect(findRecapConfig(config, 'nothing')).toBeUndefined();
+  });
+
+  it('refuses an ambiguous substring rather than picking the first recap', () => {
+    const config = configSchema.parse({
+      ...base,
+      recaps: [
+        { name: 'Zouk Weekly', sources: ['Nerds'] },
+        { name: 'Zouk Monthly', sources: ['Nerds'] },
+      ],
+    });
+    expect(findRecapConfig(config, 'zouk')).toBeUndefined();
+    expect(findRecapConfig(config, 'zouk w')?.name).toBe('Zouk Weekly');
+    expect(findRecapConfig(config, 'Zouk Monthly')?.name).toBe('Zouk Monthly');
   });
 
   it('rejects a recap whose source is not a configured group', () => {

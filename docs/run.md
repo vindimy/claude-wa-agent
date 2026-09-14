@@ -407,8 +407,9 @@ digest enrich --backfill-links "Family" --since 2d      # queue link description
 
 `<group>` accepts a JID, the configured name, or the WhatsApp subject; it also
 accepts a recap name (a group match wins first, then a recap by exact name,
-then substring). `--dry-run` still stores the summary, so a later real run
-over the same messages reuses it (`--fresh` overrides). Vault notes are
+then unique substring; an ambiguous substring is refused). `--dry-run`
+still stores the summary, so a later real run over the same messages reuses
+it (`--fresh` overrides). Vault notes are
 written directly by the command; WhatsApp sends are queued for the running
 container to deliver, and the output says which happened per channel.
 

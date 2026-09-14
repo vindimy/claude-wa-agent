@@ -127,7 +127,7 @@ allow-listed groups are ever stored; everything else is dropped at the socket.
 
 `<group>` is a JID, the `name` from `config.yaml`, or the group subject as
 WhatsApp shows it; `summarize <group>` also accepts a recap name (a group
-match wins first, then a recap by exact name, then substring). `--since`
+match wins first, then a recap by exact name, then unique substring). `--since`
 takes `30m`, `12h`, `2d`, `1w`, or an ISO date.
 Flags `--adapter`, `--style`, `--language`, `--max-words`, `--personality`,
 `--instructions`, and `--tz` override
