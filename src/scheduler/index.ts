@@ -25,6 +25,7 @@ export {
   isScheduledTrigger,
   runDigest,
 } from './run-digest.js';
+export { type RecapRequest, recapSummaryId, runRecap } from './run-recap.js';
 export { type SummarizerFactory, summarizerFor } from './run-shared.js';
 export {
   type SchedulerHandle,
