@@ -126,7 +126,9 @@ allow-listed groups are ever stored; everything else is dropped at the socket.
 | `pnpm digest enrich --backfill-links <group> --since 2d` | Queue link descriptions for messages already stored |
 
 `<group>` is a JID, the `name` from `config.yaml`, or the group subject as
-WhatsApp shows it. `--since` takes `30m`, `12h`, `2d`, `1w`, or an ISO date.
+WhatsApp shows it; `summarize <group>` also accepts a recap name (a group
+match wins first, then a recap by exact name, then substring). `--since`
+takes `30m`, `12h`, `2d`, `1w`, or an ISO date.
 Flags `--adapter`, `--style`, `--language`, `--max-words`, `--personality`,
 `--instructions`, and `--tz` override
 the group's config for one run.
@@ -157,29 +159,36 @@ shows "typing…" so a slow adapter is not mistaken for a dead agent.
 | `vault`   | Written immediately as `<vault.dir>/<group-slug>/<date>-<id>.md` with YAML front matter |
 | `self_dm` | Queued in the database; the running listener (`digest run`) sends it to your own number with 2–5 s jitter and the daily cap |
 | `group`   | Opt-in per group. Queued like a self-DM, posted by the listener, signed "🤖 Auto-digest" with a footer saying a bot wrote it |
+| `to:<name>` | A named destination under `destinations:` (a group or a phone number). Queued like a group post, gated the same three ways, headed with the source name and signed. |
 
 Because WhatsApp sends go through the listener's outbox, `digest summarize` does
 not need its own WhatsApp session and never conflicts with a running `digest
 run`. If the listener is not running, the message waits in the queue until it
 is. Sends are retried up to five times and then marked failed.
 
-#### Group posting
+#### Outward delivery: group posts and destinations
 
 A summary posted into the wrong group is the worst thing this project can do,
-so posting is gated three times:
+so every outward row — a post back into the source group, or a `to:<name>`
+row for a destination declared under `destinations:` — is gated three times:
 
-1. **Config, per group.** `deliver.group: true` must be set on the group
-   itself. Setting it under `defaults:` is a config error.
+1. **Config, per scope.** `deliver.group: true` (a group posting into itself)
+   or `deliver.to: [names]` (a group or a recap routing to a destination)
+   must be set on that scope. Setting either under `defaults:` is a config
+   error.
 2. **Trigger.** Scheduled runs (daily, weekly, threshold) post. On-demand runs
    stay private: `digest summarize` needs `--post`, and `/digest` from the
    self-chat never posts. A quick check should not surprise the group.
-3. **Send time.** The outbox re-checks the group's opt-in and that the target
-   is a group JID before every post, so a queued post is dropped if you turn
-   the flag off and restart.
+3. **Send time.** The outbox re-resolves every outward row against current
+   config: a `group` row re-checks the group's opt-in and that the target is
+   a group JID; a `to:<name>` row re-checks the name still exists, still
+   resolves to the same JID, and is still listed by that scope. A row that no
+   longer matches is dropped, not sent.
 
 Posts share the daily send cap with self-DMs and the same 2–5 s jitter. Two
-posts into the same group are spaced by `limits.min_group_post_gap_minutes`
-(default 60); a held post does not block self-DMs behind it.
+outward sends to the same target JID are spaced by
+`limits.min_group_post_gap_minutes` (default 60), whichever scope produced
+them; a held row does not block self-DMs behind it.
 
 ### Scheduling
 
@@ -343,6 +352,10 @@ dashboard:
   host: 127.0.0.1
   port: 8787
 
+destinations:                    # outward targets other than the self-chat
+  zouk-hub: { group: "120363000000000009@g.us" }
+  me: { number: "+13105551234" }
+
 groups:
   - jid: "120363000000000001@g.us"
     name: "Zouk Atoms team"
@@ -353,6 +366,12 @@ groups:
     cadence: { type: weekly, day: sun, at: "18:00" }
     summary: { language: ru, personality: friendly, instructions: "Baba is grandma." }
     ingest: { describe_images: true, describe_links: true }   # photos and links get described
+
+recaps:                          # several groups, one model call, their own cadence
+  - name: SoCal Zouk
+    sources: ["Zouk Atoms team", "Family"]
+    cadence: { type: weekly, day: sun, at: "18:00" }
+    deliver: { to: [zouk-hub, me] }
 ```
 
 Cadence types: `daily`, `weekly`, `threshold` (N messages or M hours, whichever
@@ -361,6 +380,11 @@ comes first), `manual`.
 **`deliver.group` defaults to `false` and must be set per group.** Posting a
 summary into the wrong group is the worst failure mode of this project, so
 there is no way to enable it globally.
+
+A recap summarizes several groups together in one model call, on its own
+cadence, keeping a separate watermark per source so it never interferes with
+those groups' own digests. Run one on demand with `/digest <recap>` or
+`digest summarize <recap> --since 1w`.
 
 ## Data layout
 
@@ -376,7 +400,8 @@ vault/                   # Markdown notes (config vault.dir); gitignored
 Tables: `groups`, `messages` (per-group id, sender, timestamp, kind, body,
 `edited_ts`, soft `deleted` flag), `summaries` (stable id, window, watermark,
 text), `runs` (every attempt with status, cost, and watermark),
-`deliveries` (one row per summary and channel: `queued`, `sent`, or `failed`),
+`deliveries` (one row per summary and channel, where a destination is its own
+`to:<name>` channel: `queued`, `sent`, or `failed`),
 and `questions` (every `/ask` with its answer, cost, and status).
 Every query is scoped by `tenant_id`; the store has no method that reads
 across tenants. Schema changes are versioned migrations in `src/store/db.ts`.
@@ -464,6 +489,7 @@ better-sqlite3, zod 4, pino, commander, vitest, biome.
 11. ✅ **More summary languages** — `pt`, `es`, `zh`, `ja` alongside `en`, `ru`, `auto`
 12. ✅ **Typing indicator** — "typing…" on the self-chat while a `/digest` or `/ask` reply is produced, never in a group
 13. Nice-to-have: action-item extraction as its own output
+14. ✅ **Recaps and destinations** — one recap over several groups, delivered to named groups and numbers behind the posting gates
 
 Design decisions are recorded in `docs/adr/`.
 

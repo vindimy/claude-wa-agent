@@ -11,11 +11,12 @@ src/
   listener/     Baileys socket, auth state persistence, message ingestion
   store/        SQLite (better-sqlite3): messages, groups, summaries, runs,
                 questions; every table carries tenant_id
-  scheduler/    per-group cron/threshold triggers, /digest and /ask commands,
-                typing indicator, retention pruning
+  scheduler/    per-group and per-recap cron/threshold triggers, /digest and
+                /ask commands, typing indicator, retention pruning
   summarizer/   adapter interface + implementations (cli-claude, cli-gemini,
                 cli-codex, api-anthropic, api-openai, api-google, fake)
-  delivery/     self-dm, group-post, markdown-vault
+  delivery/     self-dm, group-post, named destinations (groups and numbers),
+                markdown-vault
   dashboard/    read-only local web page + JSON endpoints (node:http, no deps)
   enrich/       image + link descriptions: ingest-time download, queue worker,
                 guarded link fetch
@@ -52,11 +53,16 @@ Full records live in `docs/adr/`. The short form:
   watermark, so a restart never double-summarizes or skips a window.
 - **Delivery is idempotent**: a summary has a stable id; each channel records
   delivery so retries are safe.
-- **Group posting is gated three times** (ADR-0002): per-group
-  `deliver.group: true`, scheduled runs only unless `--post`, and the
+- **Outward delivery (group posts and destinations) is gated three times**
+  (ADR-0002): per-scope config, scheduled runs only unless `--post`, and the
   per-tenant outbox cap.
 - **Enrichment runs off the ingest path**, capped per day, behind an SSRF
   guard (ADR-0006).
+- **Recaps are a scope, not a group** (ADR-0007): `summaries.group_jid` and
+  `runs.group_jid` hold a scope key, either a group JID or `recap:<name>`;
+  per-source recap positions live in `recap_watermarks`. Destinations are
+  `to:<name>` delivery channels, so one summary fans out under the existing
+  deliveries key.
 
 ## Deployment profiles
 

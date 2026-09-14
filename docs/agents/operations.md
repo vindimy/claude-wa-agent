@@ -9,9 +9,14 @@ account, so it behaves like a quiet human who happens to be in the group.
 
 - One outbound queue **per tenant**, 2–5 s jitter between messages, a
   per-tenant daily cap (`limits.max_sends_per_day`, default 30). No bursts.
-- Group sends only when that group has `deliver.group: true`, only from
-  scheduled runs or an explicit `--post`, and signed as an automated digest
-  (e.g. "🤖 auto-digest") so members know it is not the tenant typing.
+- Outward sends (a post back into the source group, or a `to:<name>`
+  destination row for a group or a number) happen only when that scope's
+  config lists the target, only from scheduled runs or an explicit `--post`,
+  and only after the outbox re-resolves the target against current config
+  at send time. Every outward message is signed as an automated digest.
+- Two outward sends to the same target JID are spaced by
+  `limits.min_group_post_gap_minutes`, whichever scope produced them. A held
+  row does not block self-DMs behind it.
 - Self-DM and vault are the default channels; `/ask` answers are self-DM only.
 
 ## Quiet client

@@ -340,10 +340,10 @@ history, set `cadence: { type: manual }` instead.
 digest schedule
 ```
 
-Per group: the effective cadence, delivery channels, last run with trigger
-and status, the watermark, pending message count for `threshold` cadences,
-and whether a digest is due right now with the reason. This is the first
-thing to run when "the digest did not arrive".
+Per group and per recap (marked `(recap)`): the effective cadence, delivery
+channels, last run with trigger and status, the watermark, pending message
+count for `threshold` cadences, and whether a digest is due right now with
+the reason. This is the first thing to run when "the digest did not arrive".
 
 ## Talking to the agent
 
@@ -405,11 +405,12 @@ digest enrich                                           # describe queued photos
 digest enrich --backfill-links "Family" --since 2d      # queue link descriptions for stored messages
 ```
 
-`<group>` accepts a JID, the configured name, or the WhatsApp subject.
-`--dry-run` still stores the summary, so a later real run over the same
-messages reuses it (`--fresh` overrides). Vault notes are written directly
-by the command; WhatsApp sends are queued for the running container to
-deliver, and the output says which happened per channel.
+`<group>` accepts a JID, the configured name, or the WhatsApp subject; it also
+accepts a recap name (a group match wins first, then a recap by exact name,
+then substring). `--dry-run` still stores the summary, so a later real run
+over the same messages reuses it (`--fresh` overrides). Vault notes are
+written directly by the command; WhatsApp sends are queued for the running
+container to deliver, and the output says which happened per channel.
 
 ### Fetching summaries you already have
 

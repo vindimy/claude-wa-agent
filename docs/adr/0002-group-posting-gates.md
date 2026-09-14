@@ -38,3 +38,21 @@ the top ("🤖 Auto-digest") and bottom (a footer saying a bot wrote it).
   if it proves useful; it is not built until asked for.
 - When per-tenant settings move into the store, gate 1 becomes a per-group
   column with the same "no global default" rule.
+
+## Amendment (2026-09-13, phase 14)
+
+The same three gates now cover every **outward** row, not only a post back
+into the source group. Outward means a `group` row or a `to:<name>` row for a
+destination declared under `destinations:` (a group JID or a phone number).
+
+1. **Config, per scope.** `deliver.to` is set on the group or on the recap.
+   `defaults.deliver.to` is rejected for the same reason as
+   `defaults.deliver.group`: a global destination would route a family chat's
+   digest into a community hub.
+2. **Trigger.** Unchanged. `--post` now lifts the gate for destinations too.
+3. **Send time.** The outbox re-resolves each `to:` row: the name must still
+   exist, still resolve to the exact JID on the row, and still be listed by
+   the summary's scope. The target must be a group or user JID.
+
+The per-target gap applies to all outward rows by target JID. See ADR 0007
+for recaps and scope keys.

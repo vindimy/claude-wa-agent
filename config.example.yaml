@@ -28,6 +28,14 @@ personalities:
     A grumpy but loving uncle who has seen it all. Complains about how things
     used to be simpler, then gets the facts exactly right anyway.
 
+# Outward targets other than your self-chat: a group you are in, or a phone
+# number (a saved contact, or your own second number; DMing strangers from an
+# unofficial client is a spam signal). Referenced by name from `deliver.to`
+# on a group or a recap. Never under `defaults:`.
+destinations:
+  zouk-hub: { group: "120363000000000009@g.us" }
+  me: { number: "+13105551234" }
+
 # Per-adapter options, keyed by adapter name. All keys optional.
 # Override the adapter for every group at runtime with SUMMARIZER=api-anthropic
 # (used by the Docker profile when CLI auth is not available).
@@ -97,6 +105,8 @@ groups:
     # Post scheduled digests back into this group, signed "🤖 Auto-digest".
     # Must be set per group; `defaults.deliver.group: true` is rejected.
     # deliver: { group: true }
+    # Send this group's own digest onward as well:
+    # deliver: { to: [me] }
   - jid: "120363000000000002@g.us"
     name: "Family"
     cadence: { type: weekly, day: sun, at: "18:00" }
@@ -106,3 +116,15 @@ groups:
       instructions: "Baba is grandma; the twins are Masha and Dasha."
     # Describe photos and links in this group only.
     # ingest: { describe_images: true, describe_links: true }
+
+# A recap summarizes several groups together, in one model call, on its own
+# schedule. Each source keeps its own watermark for the recap, separate from
+# the group's own digest. A group that should only appear in a recap sets
+# `cadence: { type: manual }`.
+recaps:
+  - name: SoCal Zouk
+    sources: ["Example group", "Family"]      # configured group names or JIDs
+    cadence: { type: weekly, day: sun, at: "18:00", tz: "America/Los_Angeles" }
+    summary: { max_words: 600, instructions: "Lead with events and deadlines." }
+    # self_dm and vault default from `defaults.deliver`; `to` is per recap only.
+    deliver: { to: [zouk-hub, me] }

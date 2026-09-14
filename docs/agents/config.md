@@ -25,6 +25,10 @@ defaults:
 personalities:              # custom voices in plain English, referenced by name
   grumpy-uncle: "A grumpy but loving uncle who still gets every fact right."
 
+destinations:                # outward targets other than the self-chat
+  zouk-hub: { group: "1203630ZZZZZZZZ@g.us" }
+  me: { number: "+13105551234" }
+
 groups:
   - jid: "1203630XXXXXXXX@g.us"
     name: "Zouk Atoms team"
@@ -34,6 +38,12 @@ groups:
     name: "Family"
     cadence: { type: weekly, day: sun, at: "18:00" }
     summary: { language: ru, personality: friendly, instructions: "Baba is grandma." }
+
+recaps:                      # several groups, one model call, their own cadence
+  - name: SoCal Zouk
+    sources: ["Zouk Atoms team", "Family"]
+    cadence: { type: weekly, day: sun, at: "18:00" }
+    deliver: { to: [zouk-hub, me] }
 ```
 
 ## Knobs
@@ -58,17 +68,30 @@ groups:
 - **Dashboard**: `dashboard: { enabled: false, host: 127.0.0.1, port: 8787 }`,
   overridable with `DASHBOARD_PORT` / `DASHBOARD_HOST`. No auth, so loopback
   only; the page can never send, summarize, or change config.
+- **Destinations and recaps**: `destinations:` names outward targets
+  (`{ group: <jid> }` or `{ number: <phone> }`); `deliver.to: [names]` on a
+  group or a recap sends there, gated like `deliver.group` (per scope, never
+  under `defaults`, scheduled runs only unless `--post`, re-checked at send
+  time). A recap (`recaps:`) has `name`, `sources` (configured groups),
+  and the same `cadence`, `summarizer`, `summary`, and `deliver` keys as a
+  group minus `deliver.group`. Recap names must not collide with group
+  names: `/digest <ref>` and `digest summarize <ref>` try groups first,
+  then recaps (exact name, then substring).
 
 ## Self-chat commands
 
 The tenant sends these from their own number in their self-chat. Parsing
 lives in `src/scheduler/commands.ts`.
 
-- `/digest [group] [window]` triggers an on-demand digest. The `digest
-  summarize` knobs ride along as `key=value` tokens or `--flags`:
+- `/digest [group|recap] [window]` triggers an on-demand digest. `<ref>`
+  resolves a group first (JID, name, subject), then a recap (exact name,
+  then substring); a recap run summarizes every source from each source's
+  own recap watermark, in one model call. The `digest summarize` knobs ride
+  along as `key=value` tokens or `--flags`:
   `/digest Family 2d style=narrative lang=ru words=150 voice=dry via=api-openai`.
   On-demand digests stay private (self-DM + vault) unless `--post` is given
-  and the group has `deliver.group: true`.
+  and the target has `deliver.group: true` (a group) or `deliver.to` set (a
+  group or a recap).
 - `/ask <group> [window] <question>` answers from stored messages, whole
   retention window by default. Answers are self-DM only, recorded in
   `questions`, and never move a watermark.

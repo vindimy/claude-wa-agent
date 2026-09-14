@@ -1,6 +1,6 @@
 # Recaps and destinations (phase 14)
 
-Status: designed 2026-09-13, approved in chat, awaiting implementation plan.
+Status: implemented 2026-09-13 (phase 14).
 
 ## Goal
 
