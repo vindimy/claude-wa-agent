@@ -173,6 +173,29 @@ describe('runRecap', () => {
     expect(md).toContain(`jid: "${A}"`);
   });
 
+  it('records a run and the watermarks when a real run reuses a dry-run recap', async () => {
+    const { store, base, a, b } = setup();
+    const dry = await runRecap({ ...base, sinceTs: 0, dryRun: true });
+    if (!dry.ok || dry.value.kind !== 'ok') throw new Error('unexpected');
+    expect(store.recentRuns('owner', 'recap:Zouk', 0)).toHaveLength(0);
+
+    const real = await runRecap({ ...base, sinceTs: 0 });
+    if (!real.ok || real.value.kind !== 'ok') throw new Error('unexpected');
+    expect(real.value.reused).toBe(true);
+    const runs = store.recentRuns('owner', 'recap:Zouk', 0);
+    expect(runs).toHaveLength(1);
+    expect(runs[0]).toMatchObject({
+      status: 'ok',
+      summaryId: dry.value.summary.id,
+      trigger: 'weekly',
+      costUsd: null,
+      durationMs: null,
+    });
+    const wm = store.recapWatermarks('owner', 'Zouk');
+    expect(wm.get(A)?.watermarkId).toBe(a[a.length - 1]?.id);
+    expect(wm.get(B)?.watermarkId).toBe(b[b.length - 1]?.id);
+  });
+
   it('dry run stores the summary but moves no watermark', async () => {
     const { store, base } = setup();
     const result = await runRecap({ ...base, dryRun: true });

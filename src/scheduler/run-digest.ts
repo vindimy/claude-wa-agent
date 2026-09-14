@@ -106,6 +106,31 @@ export async function runDigest(req: DigestRequest): Promise<Result<DigestResult
 
   if (summary) {
     log.info({ group: group.jid, summaryId: sid, trigger }, 'reusing stored summary');
+    // A reused summary still closes the occurrence. Without a run row the
+    // scheduler would find nothing for this occurrence, fire again every
+    // tick, and the next fresh run would cover the window a second time.
+    if (!dryRun) {
+      store.insertRun({
+        tenantId,
+        id: randomUUID(),
+        groupJid: group.jid,
+        trigger,
+        dryRun: false,
+        sinceTs,
+        untilTs,
+        messageCount: summary.messageCount,
+        watermarkTs: summary.watermarkTs,
+        watermarkId: summary.watermarkId,
+        summaryId: sid,
+        adapter: summary.adapter,
+        model: summary.model,
+        status: 'ok',
+        error: null,
+        costUsd: null,
+        durationMs: null,
+        createdTs: Math.floor(now() / 1000),
+      });
+    }
   } else {
     reused = false;
     const options: SummaryOptions = mergeSummary(group.summary, req.summaryOptions);

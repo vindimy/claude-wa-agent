@@ -2,11 +2,12 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { type Config, configSchema } from '../config/index.js';
+import { type Config, configSchema, resolveRecapConfig } from '../config/index.js';
 import { Store } from '../store/index.js';
 import { loadFixtureTranscript } from '../summarizer/fixtures.js';
 import { createFakeSummarizer } from '../summarizer/index.js';
 import { runDigest } from './run-digest.js';
+import { runRecap } from './run-recap.js';
 import { startScheduler } from './scheduler.js';
 
 const LA = 'America/Los_Angeles';
@@ -422,6 +423,48 @@ describe('scheduler', () => {
       await s.tick();
       const runs = store.recentRuns('owner', 'recap:Both', 0);
       expect(runs.map((r) => r.status)).toEqual(['empty']);
+      s.stop();
+    });
+
+    it('records a scheduled recap that reuses a preview, so it does not re-fire', async () => {
+      seed(store, G1, NOW - 600);
+      seed(store, G2, NOW - 300, 5);
+      const recap = resolveRecapConfig(config, 'Both');
+      if (!recap) throw new Error('recap missing');
+      // The owner previews the same window with --dry-run first.
+      const preview = await runRecap({
+        tenantId: 'owner',
+        store,
+        config,
+        recap,
+        sinceTs: NOW - 86_400,
+        untilTs: NOW,
+        trigger: 'manual',
+        tz: LA,
+        vaultDir,
+        dryRun: true,
+        now: () => clock,
+        summarizerFactory: fakeFactory,
+      });
+      expect(preview.ok).toBe(true);
+      expect(store.recentRuns('owner', 'recap:Both', 0)).toHaveLength(0);
+
+      const s = start();
+      const out = await s.tick();
+      expect(out.find((o) => o.scope === 'recap:Both')).toMatchObject({
+        decision: { due: true },
+        result: 'reused',
+      });
+      const runs = store.recentRuns('owner', 'recap:Both', 0);
+      expect(runs).toHaveLength(1);
+      expect(runs[0]).toMatchObject({ status: 'ok', trigger: 'daily' });
+      expect(store.recapWatermarks('owner', 'Both').size).toBe(2);
+
+      const again = await s.tick();
+      expect(again.find((o) => o.scope === 'recap:Both')?.decision).toMatchObject({
+        due: false,
+        reason: 'already ran for this occurrence',
+      });
       s.stop();
     });
 

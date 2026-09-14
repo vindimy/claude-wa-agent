@@ -67,6 +67,14 @@ export function recapSummaryId(tenantId: string, key: string, sections: SummaryS
   return createHash('sha256').update(parts.join('\n')).digest('hex');
 }
 
+/** Last message of each non-empty section, the position a recap run records. */
+function sourceWatermarks(sections: SummarySection[]): RecapWatermark[] {
+  return sections.flatMap((sec) => {
+    const last = sec.messages[sec.messages.length - 1];
+    return last ? [{ sourceJid: sec.groupJid, watermarkTs: last.ts, watermarkId: last.id }] : [];
+  });
+}
+
 /**
  * The recap pipeline: read every source from its own watermark, summarize
  * the sectioned transcript once, record the run plus per-source watermarks,
@@ -109,6 +117,35 @@ export async function runRecap(req: RecapRequest): Promise<Result<DigestResult, 
 
   if (summary) {
     log.info({ recap: recap.name, summaryId: sid, trigger }, 'reusing stored recap');
+    // A reused recap still closes the occurrence and still covers its
+    // sources: without the run row and the watermarks the scheduler would
+    // fire again every tick and the next fresh run would repeat the window.
+    if (!dryRun) {
+      store.recordRecapRun(
+        {
+          tenantId,
+          id: randomUUID(),
+          groupJid: recap.key,
+          trigger,
+          dryRun: false,
+          sinceTs,
+          untilTs,
+          messageCount: summary.messageCount,
+          watermarkTs: summary.watermarkTs,
+          watermarkId: summary.watermarkId,
+          summaryId: sid,
+          adapter: summary.adapter,
+          model: summary.model,
+          status: 'ok',
+          error: null,
+          costUsd: null,
+          durationMs: null,
+          createdTs: Math.floor(now() / 1000),
+        },
+        recap.name,
+        sourceWatermarks(sections),
+      );
+    }
   } else {
     reused = false;
     const options: SummaryOptions = mergeSummary(recap.summary, req.summaryOptions);
@@ -190,14 +227,7 @@ export async function runRecap(req: RecapRequest): Promise<Result<DigestResult, 
       createdTs,
     } satisfies SummaryRecord;
     store.upsertSummary(summary);
-    const advanced: RecapWatermark[] = dryRun
-      ? []
-      : sections.flatMap((sec) => {
-          const last = sec.messages[sec.messages.length - 1];
-          return last
-            ? [{ sourceJid: sec.groupJid, watermarkTs: last.ts, watermarkId: last.id }]
-            : [];
-        });
+    const advanced: RecapWatermark[] = dryRun ? [] : sourceWatermarks(sections);
     store.recordRecapRun(
       {
         ...runBase,

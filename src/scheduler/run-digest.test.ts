@@ -110,6 +110,32 @@ describe('runDigest personality and instructions', () => {
   });
 });
 
+describe('runDigest reuse', () => {
+  it('records a run when a real run reuses a dry-run summary', async () => {
+    const { config, store, base } = setup({ groups: [{ jid: G1, name: 'Team' }] });
+    const { resolveGroupConfig } = await import('../config/index.js');
+    const group = resolveGroupConfig(config, G1);
+    if (!group) throw new Error('group missing');
+    const dry = await runDigest({ ...base, group, dryRun: true });
+    if (!dry.ok || dry.value.kind !== 'ok') throw new Error('unexpected');
+    expect(store.recentRuns('owner', G1, 0)).toHaveLength(0);
+
+    const real = await runDigest({ ...base, group, dryRun: false, trigger: 'daily' });
+    if (!real.ok || real.value.kind !== 'ok') throw new Error('unexpected');
+    expect(real.value.reused).toBe(true);
+    const runs = store.recentRuns('owner', G1, 0);
+    expect(runs).toHaveLength(1);
+    expect(runs[0]).toMatchObject({
+      status: 'ok',
+      trigger: 'daily',
+      summaryId: dry.value.summary.id,
+      costUsd: null,
+      durationMs: null,
+    });
+    expect(store.lastWatermark('owner', G1)?.watermarkTs).toBe(dry.value.summary.watermarkTs);
+  });
+});
+
 describe('runDigest destinations', () => {
   const HUB = '120363000000000009@g.us';
   const withDest = {
